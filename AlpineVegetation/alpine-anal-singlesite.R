@@ -21,6 +21,7 @@
 
 
 # load libraries
+library(betapart)  # for partitioning beta diversity
 library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
 library(ggfortify) # for residual and other diagnostic plot
 library(ggplot2)   # for plotting
@@ -30,6 +31,8 @@ library(readxl)    # for opening the Excel spreadsheets and reading off them
 library(reshape2)  # for melting and casting
 library(lmerTest)  # for the linear mixed modelling
 library(stringr)   # string handling (like case conversion)
+library(vegan)     # for ordination methods (in general)
+
 
 # Load some common functions
 source("../CommonFiles/common.functions.R")
@@ -60,12 +63,17 @@ veg.df <- plyr::ddply(work.books, "file.name", function(x){
 # I will add some "fake data" based on the above data by randomly sampling from the above 
 # and changing the dates to 2014 and 2015
 set.seed(234234)
+original.veg.df <- veg.df
+veg.2013 <- original.veg.df[ sample(1:nrow(veg.df), nrow(veg.df), replace=TRUE),]
+veg.2013$Date <- as.Date( paste("2013-", format(veg.df$Date, "%m-%d")))
 veg.2017 <- veg.df[ sample(1:nrow(veg.df), nrow(veg.df), replace=TRUE),]
 veg.2017$Date <- as.Date( paste("2017-", format(veg.df$Date, "%m-%d")))
 veg.2021 <- veg.df[ sample(1:nrow(veg.df), nrow(veg.df), replace=TRUE),]
 veg.2021$Date <- as.Date( paste("2021-", format(veg.df$Date, "%m-%d")))
+veg.2024 <- original.veg.df[ sample(1:nrow(veg.df), nrow(veg.df), replace=TRUE),]
+veg.2024$Date <- as.Date( paste("2024-", format(veg.df$Date, "%m-%d")))
 
-veg.df <- rbind(veg.df, veg.2017, veg.2021)
+veg.df <- rbind(veg.2013, veg.2017, veg.2021, veg.2024)
 # combined species that were sampled twice
 names(veg.df) <- make.names(names(veg.df))
 veg.df <- plyr::ddply(veg.df, c("Study.Area.Name","Transect.Label","Date","Comments","Species"), plyr::summarize,
@@ -336,10 +344,11 @@ ggsave(plot=cover.plot.summary.avg,
 #----------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------
 #  Analysis of mean plot-level species richness
+#  Only want those species that have cover > 0. Species with cover = 0 are not present.
 
 # Compute the species richness for each plot in each transect
 richness <- plyr::ddply(veg.df, c("Study.Area.Name","Year","Transect.Label","Plot"), plyr::summarize,
-                          richness=length(Species))
+                          richness=length(Species[ Foliar.cover.... > 0]))
 
 # Compute the average richness for each transect so I can plot these over time
 richness.transect <- plyr::ddply(richness, c("Study.Area.Name","Year","Transect.Label"), plyr::summarize,
@@ -778,6 +787,163 @@ diversity.plot.summary.avg <- ggplot2::ggplot(data=diversity.avg,
 diversity.plot.summary.avg
 ggsave(plot=diversity.plot.summary.avg, 
        file=paste(file.prefix,'-diversity-plot-summary-avg.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+
+
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+# Follow methods of Collins we partition beta diversity into turnover and nestedness
+
+
+# Convert long format to wide format for each plot/transect combination
+
+
+veg.wide <- reshape2::dcast(veg.df, Study.Area.Name+Transect.Label+Plot+Year~Species, sum,
+                            value.var="Foliar.cover....", fill=0)
+# impute a zero for any missing percent covers
+veg.wide[ is.na(veg.wide)] <- 0
+
+# Compute the distances for turnover and nestedness for each transect-year combination comparing to the first 
+# years data.
+# Then do a regression these over time
+
+dissim.transect <- ddply(veg.wide, c("Study.Area.Name","Transect.Label"), function (x){
+    # Convert the species dissimage to presence/absence
+    species.names <- names(x)
+    species.names <- names(x)[ !names(x) %in% c("Study.Area.Name","Transect.Label","Plot","Year")]
+
+    # Compute the dissimiarlity for each plot in subsequent years relative to the first year the
+    # plot was measured. Then average these diversity measures over the plots within a transect
+    # first convert to presence/absence data
+    x[, species.names] <- as.numeric( x[,species.names] > 0)
+    plot.level <- plyr::ddply(x, "Plot", function(x, species.names){
+         first.year <- x[ which.min(x$Year),]
+         diffs <- ddply(x, "Year", function(x,first.year,species.names){
+            #browser()
+            dissim <- betapart::beta.pair( rbind(first.year[, species.names,drop=FALSE],x[,species.names,drop=FALSE]))
+            dissim <- unlist(dissim)
+            data.frame(betatype=names(dissim), dissim=dissim)
+         },first.year=first.year, species.names=species.names)
+    }, species.names=species.names)
+    #browser()
+    # drop the first years
+    first.year <- min(x$Year)
+    plot.level <- plot.level[ plot.level$Year != first.year,]
+    mean.dissim <- plyr::ddply(plot.level, c("Year","betatype"), plyr::summarize, mean.dissim = mean(dissim))
+    mean.dissim
+})
+dissim.transect
+
+# Make a preliminary plot of dissimilarity by years
+
+prelim.dissim.plot <- ggplot(data=dissim.transect, aes(x=Year, y=mean.dissim, color=Transect.Label, linetype=Transect.Label))+
+   ggtitle("Mean dissimiarity relative to first year")+
+   ylab("Mean dissimilarity relative to first year")+
+   geom_point(position=position_dodge(width=.2))+
+   geom_line()+
+   scale_x_continuous(breaks=min(dissim.transect$Year, na.rm=TRUE):max(dissim.transect$Year, na.rm=TRUE))+
+   facet_wrap(~interaction(Study.Area.Name,betatype,sep=" "), ncol=2, scales="free_y")+
+   theme(legend.position = c(1, 0), legend.justification = c(1, 0)) 
+prelim.dissim.plot 
+ggsave(plot=prelim.dissim.plot, 
+       file=paste(file.prefix,'-dissim-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+
+dissim.transect$YearF           <- factor(dissim.transect$Year)
+dissim.transect$Transect.LabelF <- factor(dissim.transect$Transect.Label)
+dissim.transect
+
+# Fit a line through each dissimilarity measured
+fits <- dlply(dissim.transect, c("betatype"), function(x){
+   cat("\n\n\n*** Starting analysis on beta diversity type ", x$betatype[1],  "\n")
+   dissim.transect <- x
+
+   dissim.fit.lmer <-  lmerTest::lmer(mean.dissim ~ Year + (1|Transect.LabelF) + (1|YearF), data=dissim.transect)
+   print(anova(dissim.fit.lmer,dfm='Kenward-Roger'))
+   print(summary(dissim.fit.lmer))
+   print(VarCorr(dissim.fit.lmer))
+   list(Study.Area.Name =x$Study.Area.Name[1],
+        betatype=x$betatype[1], 
+        fit=dissim.fit.lmer)
+})
+
+# Look at the residual plot 
+plyr::l_ply(fits, function(x){
+   cat("\n\n\n*** Generating diagnostic plots for beta diversity type ", x$betatype[1],  "\n")
+   dissim.fit.lmer <- x$fit
+   diag.plot <- sf.autoplot.lmer(dissim.fit.lmer)  # residual and other diagnostic plots
+   plot(diag.plot)
+   ggplot2::ggsave(plot=diag.plot, 
+                file=paste(file.prefix,"-dissim-residual-lmer-plot-",x$betatype,".png",sep=""),
+                h=6, w=6, units="in", dpi=300)
+})
+
+# check for autocorrelation - look at the average residual over time
+plyr::l_ply(fits, function (x){
+   cat("\n\n\n*** Testing for autocorrelation for beta diversity type ", x$betatype[1],  "\n")
+   #browser()
+   dissim.fit.lmer <- x$fit
+   dissim.transect <- x$fit@frame
+   dissim.transect$resid <- dissim.transect$mean.dissim - predict(dissim.fit.lmer, newdata=dissim.transect, re.form=~0)
+   mean.resid <- plyr::ddply(dissim.transect, "Year", summarize, mean.resid=mean(resid))
+   resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+   dwres1 <- car::durbinWatsonTest(resid.fit)
+   print(dwres1)
+   dwres2 <- lmtest::dwtest(resid.fit)
+   print(dwres2)
+})
+
+
+# extract the slope
+
+dissim.slopes <- ldply(fits, function(x){
+  dissim.transect <- x$fit@frame # get the data
+  dissim.fit.lmer <- x$fit
+  #browser()
+  data.frame(
+       Study.Area.Name = x$Study.Area.Name,
+       slope           = fixef(dissim.fit.lmer)["Year"],
+       slope.se        = summary(dissim.fit.lmer)$coefficients["Year","Pr(>|t|)"],
+       p.value         = summary(dissim.fit.lmer)$coefficients[row.names(summary(dissim.fit.lmer)$coefficients)=="Year"  ,"Pr(>|t|)"], 
+       #r2             = summary(dissim.fit.lmer)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+})
+dissim.slopes
+
+
+# compute the fitted values from the model
+dissim.fitted <- plyr::ldply(fits, function(x){
+   dissim.fit.lmer <- x$fit
+   dissim.transect <- x$fit@frame
+   dissim.fitted <- data.frame(
+                 Study.Area.Name=x$Study.Area.Name[1],
+                 Year=seq(min(dissim.transect$Year, na.rm=TRUE),max(dissim.transect$Year, na.rm=TRUE), .1),
+                 stringsAsFactors=FALSE)
+   dissim.fitted$pred.mean <- predict(dissim.fit.lmer, newdata=dissim.fitted,type="response", re.form=~0)
+   dissim.fitted
+})
+head(dissim.fitted)
+
+# Plot with trend line 
+dissim.plot.summary <- ggplot2::ggplot(data=dissim.transect,
+                                    aes(x=Year, y=mean.dissim))+
+   ggtitle("Mean dissimilarity relative to first year")+
+   ylab("Mean disssimilarity relative to first year")+
+   geom_point(size=3, aes(color=Transect.Label),position=position_dodge(w=0.2))+
+   geom_line(data=dissim.fitted, aes(x=Year,y=pred.mean))+
+   facet_wrap(~interaction(Study.Area.Name,betatype,sep=" "), ncol=2, scales="free_y")+
+   theme(legend.position = c(1, 0), legend.justification = c(1, 0))+ 
+   scale_x_continuous(breaks=min(dissim.transect$Year, na.rm=TRUE):max(dissim.transect$Year,na.rm=TRUE))+
+   geom_text(data=dissim.slopes, aes(x=min(dissim.transect$Year, na.rm=TRUE), y=max(dissim.transect$mean.dissim, na.rm=TRUE)), 
+             label=paste("Slope : ",round(dissim.slopes$slope,2), 
+                         " ( SE "  ,round(dissim.slopes$slope.se,2),")",
+                         " p :"    ,round(dissim.slopes$p.value,3)),
+                         hjust="left")
+dissim.plot.summary
+ggsave(plot=dissim.plot.summary, 
+       file=paste(file.prefix,'-dissim-plot-summary-lmer.png',sep=""),
        h=6, w=6, units="in", dpi=300)
 
 
