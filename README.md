@@ -1,5 +1,5 @@
 
-# Sample Analyses for five protocols as part of BC Parks Long-term Ecological Monitoring program
+# LTEM Sample Analyses
 
 R script based on data from one site for each of five protocols included in BC Parks long-term ecological monitoring program. 
 ### License
