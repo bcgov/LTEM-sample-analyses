@@ -1,0 +1,21 @@
+Study Area Name,Sample Station Label,Date,Time,End Time,Surveyor,Species,Count,UTM Zone,Easting,Northing,Comments,Inventory Method,Berry count,Stem diameter (mm),Average weight (gms),Fate,N.for.Weight
+Schoen Lake Park,plant1-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,average weight based on N = 20;  branches measured where tag is located,berry count,8,3.85,0.2015,1,20
+Schoen Lake Park,plant1-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,, branches measured where tag is located,berry count,2,5.21,0.2015,1,20
+Schoen Lake Park,plant2-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,browsed,berry count,NA,5.93,0.2015,1,20
+Schoen Lake Park,plant2-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,8,7,0.2015,1,20
+Schoen Lake Park,plant3-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,7,8.13,0.2015,1,20
+Schoen Lake Park,plant3-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,2,5.64,0.2015,1,20
+Schoen Lake Park,plant4-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,browsed,berry count,NA,4.57,0.2015,1,20
+Schoen Lake Park,plant4-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,3,4.25,0.2015,1,20
+Schoen Lake Park,plant5-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,8,3.9,0.2015,1,20
+Schoen Lake Park,plant5-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,5,3.55,0.2015,1,20
+Schoen Lake Park,plant6-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,3,4.98,0.2015,1,20
+Schoen Lake Park,plant6-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,0,3.85,0.2015,1,20
+Schoen Lake Park,plant7-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,9,5.04,0.2015,3,20
+Schoen Lake Park,plant7-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,6,4.78,0.2015,1,20
+Schoen Lake Park,plant8-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,3,6.56,0.2015,3,20
+Schoen Lake Park,plant8-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,7,8.08,0.2015,1,20
+Schoen Lake Park,plant9-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,8,6.89,0.2015,1,20
+Schoen Lake Park,plant9-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,,berry count,9,7.13,0.2015,1,20
+Schoen Lake Park,plant10-stem1,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,browsed,berry count,NA,4.08,0.2015,1,20
+Schoen Lake Park,plant10-stem2,12-Aug-14,13:30,,Jessie Moore,VACCPAR,1,,,,browsed,berry count,NA,4.15,0.2015,1,20

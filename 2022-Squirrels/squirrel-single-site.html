@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.0.32">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Red Squirels - LTEM - Purcell</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+<script src="squirrel-single-site_files/libs/clipboard/clipboard.min.js"></script>
+<script src="squirrel-single-site_files/libs/quarto-html/quarto.js"></script>
+<script src="squirrel-single-site_files/libs/quarto-html/popper.min.js"></script>
+<script src="squirrel-single-site_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="squirrel-single-site_files/libs/quarto-html/anchor.min.js"></script>
+<link href="squirrel-single-site_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="squirrel-single-site_files/libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="squirrel-single-site_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="squirrel-single-site_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="squirrel-single-site_files/libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+</head>
+
+<body>
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#summary-of-red-squirrel-ltem-protocol" id="toc-summary-of-red-squirrel-ltem-protocol" class="nav-link active" data-scroll-target="#summary-of-red-squirrel-ltem-protocol"> <span class="header-section-number">1</span> Summary of Red Squirrel LTEM protocol</a>
+  <ul class="collapse">
+  <li><a href="#basic-protocol" id="toc-basic-protocol" class="nav-link" data-scroll-target="#basic-protocol"> <span class="header-section-number">1.1</span> Basic protocol</a></li>
+  <li><a href="#cautions-about-the-protocol." id="toc-cautions-about-the-protocol." class="nav-link" data-scroll-target="#cautions-about-the-protocol."> <span class="header-section-number">1.2</span> Cautions about the protocol.</a>
+  <ul class="collapse">
+  <li><a href="#dont-use-0-to-indicate-a-missing-value." id="toc-dont-use-0-to-indicate-a-missing-value." class="nav-link" data-scroll-target="#dont-use-0-to-indicate-a-missing-value."> <span class="header-section-number">1.2.1</span> Don’t use 0 to indicate a missing value.</a></li>
+  <li><a href="#no-information-on-transect-length-available" id="toc-no-information-on-transect-length-available" class="nav-link" data-scroll-target="#no-information-on-transect-length-available"> <span class="header-section-number">1.2.2</span> No information on transect length available</a></li>
+  <li><a href="#not-suitable-for-distance-sampling-to-estimate-density." id="toc-not-suitable-for-distance-sampling-to-estimate-density." class="nav-link" data-scroll-target="#not-suitable-for-distance-sampling-to-estimate-density."> <span class="header-section-number">1.2.3</span> Not suitable for distance sampling to estimate density.</a></li>
+  <li><a href="#be-careful-to-document-changes-in-transect-over-time." id="toc-be-careful-to-document-changes-in-transect-over-time." class="nav-link" data-scroll-target="#be-careful-to-document-changes-in-transect-over-time."> <span class="header-section-number">1.2.4</span> Be careful to document changes in transect over time.</a></li>
+  <li><a href="#not-clear-how-to-group-visits." id="toc-not-clear-how-to-group-visits." class="nav-link" data-scroll-target="#not-clear-how-to-group-visits."> <span class="header-section-number">1.2.5</span> Not clear how to group visits.</a></li>
+  </ul></li>
+  <li><a href="#database-structure" id="toc-database-structure" class="nav-link" data-scroll-target="#database-structure"> <span class="header-section-number">1.3</span> Database structure</a></li>
+  </ul></li>
+  <li><a href="#reading-and-checking-the-data" id="toc-reading-and-checking-the-data" class="nav-link" data-scroll-target="#reading-and-checking-the-data"> <span class="header-section-number">2</span> Reading and checking the data</a>
+  <ul class="collapse">
+  <li><a href="#variables-names-corrected-for-r" id="toc-variables-names-corrected-for-r" class="nav-link" data-scroll-target="#variables-names-corrected-for-r"> <span class="header-section-number">2.1</span> Variables names corrected for <em>R</em></a></li>
+  <li><a href="#dates-converted-to-standardized-form" id="toc-dates-converted-to-standardized-form" class="nav-link" data-scroll-target="#dates-converted-to-standardized-form"> <span class="header-section-number">2.2</span> Dates converted to standardized form</a></li>
+  <li><a href="#checking-study-area-name" id="toc-checking-study-area-name" class="nav-link" data-scroll-target="#checking-study-area-name"> <span class="header-section-number">2.3</span> Checking Study Area Name</a></li>
+  <li><a href="#checking-species-code" id="toc-checking-species-code" class="nav-link" data-scroll-target="#checking-species-code"> <span class="header-section-number">2.4</span> Checking species code</a></li>
+  <li><a href="#call-type" id="toc-call-type" class="nav-link" data-scroll-target="#call-type"> <span class="header-section-number">2.5</span> Call type</a></li>
+  <li><a href="#summarized-data-to-the-year.date.transect-level" id="toc-summarized-data-to-the-year.date.transect-level" class="nav-link" data-scroll-target="#summarized-data-to-the-year.date.transect-level"> <span class="header-section-number">2.6</span> Summarized data to the Year.Date.Transect level</a></li>
+  </ul></li>
+  <li><a href="#single-site-analysis" id="toc-single-site-analysis" class="nav-link" data-scroll-target="#single-site-analysis"> <span class="header-section-number">3</span> Single Site Analysis</a>
+  <ul class="collapse">
+  <li><a href="#calls." id="toc-calls." class="nav-link" data-scroll-target="#calls."> <span class="header-section-number">3.1</span> Calls.</a></li>
+  </ul></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Red Squirels - LTEM - Purcell</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+    
+  </div>
+  
+
+</header>
+
+<div class="cell">
+
+</div>
+<section id="summary-of-red-squirrel-ltem-protocol" class="level1" data-number="1">
+<h1 data-number="1"><span class="header-section-number">1</span> Summary of Red Squirrel LTEM protocol</h1>
+<section id="basic-protocol" class="level2" data-number="1.1">
+<h2 data-number="1.1" class="anchored" data-anchor-id="basic-protocol"><span class="header-section-number">1.1</span> Basic protocol</h2>
+<p>As taken from the protocol document:</p>
+<blockquote class="blockquote">
+<p>“Red squirrels regularly emit an audible rattle, especially when their territories are invaded. This protocol involves walking a transect (a section of a trail) and recording the location of rattles heard along the way.</p>
+</blockquote>
+<p>For this protocol, locate as many transects in a given area as possible (up to 5). Sample them annually but in a different order each year. Sampling involves walking a defined segment of trail and recording squirrel rattles or chattering.</p>
+<p>The data collected under this protocol consists of the.</p>
+<ul>
+<li>Detection Type. Was a call heard, a visual observation made or other evidence of a squirrel. Only calls will be used in this analysis</li>
+<li>Distance along the transect. The location of the observer along the transect when the detection was made.</li>
+<li>Distance from the transect. The perpendicular distance from the transect line to the observation along with the side of the transect.</li>
+</ul>
+</section>
+<section id="cautions-about-the-protocol." class="level2" data-number="1.2">
+<h2 data-number="1.2" class="anchored" data-anchor-id="cautions-about-the-protocol."><span class="header-section-number">1.2</span> Cautions about the protocol.</h2>
+<section id="dont-use-0-to-indicate-a-missing-value." class="level3" data-number="1.2.1">
+<h3 data-number="1.2.1" class="anchored" data-anchor-id="dont-use-0-to-indicate-a-missing-value."><span class="header-section-number">1.2.1</span> Don’t use 0 to indicate a missing value.</h3>
+<p>If no calls were heard on a transect, how is this indicated? For example, in the 2013 data table, there is NO observation for transect 4 on 2013-09-13. Does this mean that the transect was not run, or was it run and no squirrels were detected? The Transect Information sheet in the workbook has the GPS co-ordinates of each transect, but does not indicate if the transect was run on each of the days. It will be assume that ALL transects listed on the Transect Information worksheet are run on every date listed in the General Survey worksheet and if no information is present in the General Survey worksheet, then a 0 is imputed.</p>
+<p>If would be preferable to create another worksheet indicating which transects were run on each sampling date.</p>
+</section>
+<section id="no-information-on-transect-length-available" class="level3" data-number="1.2.2">
+<h3 data-number="1.2.2" class="anchored" data-anchor-id="no-information-on-transect-length-available"><span class="header-section-number">1.2.2</span> No information on transect length available</h3>
+<p>. There is no information about the length of each transect or if each transect was visited on its entirety each visit. It will be assumed that each transect is approximately equal in length and that the entire transect is visited on a visit.</p>
+</section>
+<section id="not-suitable-for-distance-sampling-to-estimate-density." class="level3" data-number="1.2.3">
+<h3 data-number="1.2.3" class="anchored" data-anchor-id="not-suitable-for-distance-sampling-to-estimate-density."><span class="header-section-number">1.2.3</span> Not suitable for distance sampling to estimate density.</h3>
+<p>The current data looks very similar to captured by distance sampling methods where RANDOM transects are selected in the study area and the perpendicular distance of observations to the transect are selected. Distance sampling is used to estimate density.</p>
+<p>In this protocol, transects are not selected at random. Indeed, according to the protocol,</p>
+<blockquote class="blockquote">
+<p>“Find a location that is not difficult to access and where there are abundant squirrels.”</p>
+</blockquote>
+<p>So the apparent density of squirrels may be biased upwards by the selection of transects</p>
+</section>
+<section id="be-careful-to-document-changes-in-transect-over-time." class="level3" data-number="1.2.4">
+<h3 data-number="1.2.4" class="anchored" data-anchor-id="be-careful-to-document-changes-in-transect-over-time."><span class="header-section-number">1.2.4</span> Be careful to document changes in transect over time.</h3>
+<p>The protocol is silent on how to document changes in transects over time. For example, suppose that a transect is damaged by fire? How is this recorded? Suppose that a transect is abandoned and new transect is chosen. At the very least, the transect label should NOT be recycled over time.</p>
+</section>
+<section id="not-clear-how-to-group-visits." class="level3" data-number="1.2.5">
+<h3 data-number="1.2.5" class="anchored" data-anchor-id="not-clear-how-to-group-visits."><span class="header-section-number">1.2.5</span> Not clear how to group visits.</h3>
+<p>The date that the transects are visited is also recorded. It is assumed that all transects will be visited on the same date. However, in some cases, the transects are visited over a span of 2 or 3 day – these should presumably be “pooled” into one visit. At the moment, there is no way to decide if all transects were visited on a single day, or if a “visit” corresponds to more than one day. A field should be added to the data base for the “visit”, e.g., if it takes several days to visit all transects, these should be either be recorded on the first date, or all take the same visit indicator.</p>
+</section>
+</section>
+<section id="database-structure" class="level2" data-number="1.3">
+<h2 data-number="1.3" class="anchored" data-anchor-id="database-structure"><span class="header-section-number">1.3</span> Database structure</h2>
+<p>The database for this protocol is a series of Excel workbooks with multiple sheets in each workbook. The <em>Transect Information</em> sheet contains the information on the transects available for this year. It is implicitly assumed that every transect is visited on every date. The <em>General Survey</em> sheet contains the information collected. There are multiple lines per transect.</p>
+<p>The relevant fields on the <em>Transect Information</em> worksheet are:</p>
+<ul>
+<li>Transect Label.</li>
+</ul>
+<p>The relevant fields on the <em>General Survey</em> worksheet are:</p>
+<ul>
+<li>Transect Label.</li>
+<li>Date. The date the data was collected. The Year is extracted from this date.</li>
+<li>Detect Type. What type of detection was made. Only calls are of interest. A value of zeros will be imputed for the total number of calls heard on the transect if there is no information on a transect on a particular date.</li>
+</ul>
+</section>
+</section>
+<section id="reading-and-checking-the-data" class="level1" data-number="2">
+<h1 data-number="2"><span class="header-section-number">2</span> Reading and checking the data</h1>
+<p>The database was read for all record pertaining to the Purcell. The following files were found:</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>File names with the data </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                              file.name
+1 General Survey-squirrels_PWC_2013.xls
+2 General Survey-squirrels_PWC_2014.xls
+3 General Survey-squirrels_PWC_2015.xls</code></pre>
+</div>
+</div>
+<p>These workbooks were read using <em>R</em>:</p>
+<div class="cell">
+
+</div>
+<p>The following data editing was performed</p>
+<section id="variables-names-corrected-for-r" class="level2" data-number="2.1">
+<h2 data-number="2.1" class="anchored" data-anchor-id="variables-names-corrected-for-r"><span class="header-section-number">2.1</span> Variables names corrected for <em>R</em></h2>
+<p>Variable names in <em>R</em> must start with a letter and contain letters or numbers or underscores. Blanks in variable names are not normally allowed, nor are special characters such as %. These are normally replaced by periods (“.”) in the variable name.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>
+Original variable names in squirrels data file</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code> [1] "file.name"               "Study Area Name"        
+ [3] "Transect Label"          "Date"                   
+ [5] "Time"                    "End Time"               
+ [7] "Surveyor"                "Species"                
+ [9] "Count"                   "UTM Zone"               
+[11] "Easting"                 "Northing"               
+[13] "Comments"                "Detect Type"            
+[15] "Distance along transect" "Detect Distance (m)"    
+[17] "Air temp (c)"            "BEC"                    
+[19] "forest type"             "Side of transect"       
+[21] "Year"                   </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+Corrected variable names of data frame</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code> [1] "file.name"               "Study.Area.Name"        
+ [3] "Transect.Label"          "Date"                   
+ [5] "Time"                    "End.Time"               
+ [7] "Surveyor"                "Species"                
+ [9] "Count"                   "UTM.Zone"               
+[11] "Easting"                 "Northing"               
+[13] "Comments"                "Detect.Type"            
+[15] "Distance.along.transect" "Detect.Distance..m."    
+[17] "Air.temp..c."            "BEC"                    
+[19] "forest.type"             "Side.of.transect"       
+[21] "Year"                   </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+Original variable names in transects data frame</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code> [1] "file.name"       "Study Area Name" "Transect Label"  "UTM Zone Start" 
+ [5] "Easting Start"   "Northing Start"  "UTM Zone End"    "Easting End"    
+ [9] "Northing End"    "Year"           </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+Corrected variable names of transect data frame</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code> [1] "file.name"       "Study.Area.Name" "Transect.Label"  "UTM.Zone.Start" 
+ [5] "Easting.Start"   "Northing.Start"  "UTM.Zone.End"    "Easting.End"    
+ [9] "Northing.End"    "Year"           </code></pre>
+</div>
+</div>
+</section>
+<section id="dates-converted-to-standardized-form" class="level2" data-number="2.2">
+<h2 data-number="2.2" class="anchored" data-anchor-id="dates-converted-to-standardized-form"><span class="header-section-number">2.2</span> Dates converted to standardized form</h2>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>Date
+2013-09-13 2013-09-14 2013-09-15 2014-09-03 2015-09-03 2015-09-04 2015-09-05 
+        29         20         19         15         14         12          3 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Year
+2013 2014 2015 
+  68   15   29 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Year
+2013 2014 2015 
+   5    5    5 </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+
+The number of records by year are </code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                                     Year
+Study.Area.Name                       2013 2014 2015
+  Purcell Wilderness Conservancy Park   68   15   29</code></pre>
+</div>
+</div>
+</section>
+<section id="checking-study-area-name" class="level2" data-number="2.3">
+<h2 data-number="2.3" class="anchored" data-anchor-id="checking-study-area-name"><span class="header-section-number">2.3</span> Checking Study Area Name</h2>
+<p>The Study Area Name should be recorded consistently across years, otherwise it may indicate that different sites are being studies. The study area name is converted to Title Case.</p>
+<p>The list of Study Area Names by year in the data is:</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>                                     Year
+Study.Area.Name                       2013 2014 2015
+  Purcell Wilderness Conservancy Park   68   15   29</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                                     Year
+Study.Area.Name                       2013 2014 2015
+  Purcell Wilderness Conservancy Park    5    5    5</code></pre>
+</div>
+</div>
+</section>
+<section id="checking-species-code" class="level2" data-number="2.4">
+<h2 data-number="2.4" class="anchored" data-anchor-id="checking-species-code"><span class="header-section-number">2.4</span> Checking species code</h2>
+<p>The species code should be the same across the file.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>        Year
+Species  2013 2014 2015
+  M-TAHU   68   15   29</code></pre>
+</div>
+</div>
+</section>
+<section id="call-type" class="level2" data-number="2.5">
+<h2 data-number="2.5" class="anchored" data-anchor-id="call-type"><span class="header-section-number">2.5</span> Call type</h2>
+<p>We will only use the detecton type is <em>CA</em> (calls).</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>           Year
+Detect.Type 2013 2014 2015
+         CA   64   14   28
+         VI    4    1    1</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>           Year
+Detect.Type 2013 2014 2015
+         CA   64   14   28</code></pre>
+</div>
+</div>
+</section>
+<section id="summarized-data-to-the-year.date.transect-level" class="level2" data-number="2.6">
+<h2 data-number="2.6" class="anchored" data-anchor-id="summarized-data-to-the-year.date.transect-level"><span class="header-section-number">2.6</span> Summarized data to the Year.Date.Transect level</h2>
+<p>We need to first summarize the data to the Year.Date.Transect level and impute 0’s for transects that were run, but no calls were recorded.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>       Year
+n.calls 2013 2014 2015
+     1     2    1    2
+     2     4    2    3
+     3     0    0    3
+     4     0    1    1
+     5     2    1    0
+     7     2    0    1
+     9     1    0    0
+     10    1    0    0
+     11    1    0    0</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>  Year Transect.Label       Date                     Study.Area.Name
+1 2013             T1 2013-09-13 Purcell Wilderness Conservancy Park
+2 2013             T2 2013-09-13 Purcell Wilderness Conservancy Park
+3 2013             T3 2013-09-13 Purcell Wilderness Conservancy Park
+4 2013             T4 2013-09-13 Purcell Wilderness Conservancy Park
+5 2013             T5 2013-09-13 Purcell Wilderness Conservancy Park
+6 2013             T1 2013-09-14 Purcell Wilderness Conservancy Park</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 28  5</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 35  5</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Missing transect data on the following date --- check your data</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>                       Study.Area.Name Year       Date Transect.Label n.calls
+4  Purcell Wilderness Conservancy Park 2013 2013-09-13             T4      NA
+10 Purcell Wilderness Conservancy Park 2013 2013-09-14             T5      NA
+29 Purcell Wilderness Conservancy Park 2015 2015-09-04             T4      NA
+30 Purcell Wilderness Conservancy Park 2015 2015-09-04             T5      NA
+31 Purcell Wilderness Conservancy Park 2015 2015-09-05             T1      NA
+32 Purcell Wilderness Conservancy Park 2015 2015-09-05             T2      NA
+35 Purcell Wilderness Conservancy Park 2015 2015-09-05             T5      NA</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] Study.Area.Name Year            Date            Transect.Label 
+[5] n.calls        
+&lt;0 rows&gt; (or 0-length row.names)</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>, , Study.Area.Name = Purcell Wilderness Conservancy Park
+
+              Date
+Transect.Label 2013-09-13 2013-09-14 2013-09-15 2014-09-03 2015-09-03
+            T1          7          2          7          4          1
+            T2          9          5          2          2          3
+            T3         11         10          5          5          4
+            T4          0          1          1          1          2
+            T5          2          0          2          2          3
+              Date
+Transect.Label 2015-09-04 2015-09-05
+            T1          7          0
+            T2          3          0
+            T3          2          1
+            T4          0          2
+            T5          0          0</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>, , Study.Area.Name = Purcell Wilderness Conservancy Park
+
+              Date
+Transect.Label 2013-09-13 2013-09-14 2013-09-15 2014-09-03 2015-09-03
+            T1          1          1          1          1          1
+            T2          1          1          1          1          1
+            T3          1          1          1          1          1
+            T4          1          1          1          1          1
+            T5          1          1          1          1          1
+              Date
+Transect.Label 2015-09-04 2015-09-05
+            T1          1          1
+            T2          1          1
+            T3          1          1
+            T4          1          1
+            T5          1          1</code></pre>
+</div>
+</div>
+<p>Following this, we summarize the data (with imputed 0’s) to mean number of calls per year per transect.</p>
+<div class="cell">
+<div class="cell-output cell-output-stdout">
+<pre><code>                       Study.Area.Name Year Transect.Label   n.calls
+1  Purcell Wilderness Conservancy Park 2013             T1 5.3333333
+2  Purcell Wilderness Conservancy Park 2013             T2 5.3333333
+3  Purcell Wilderness Conservancy Park 2013             T3 8.6666667
+4  Purcell Wilderness Conservancy Park 2013             T4 0.6666667
+5  Purcell Wilderness Conservancy Park 2013             T5 1.3333333
+6  Purcell Wilderness Conservancy Park 2014             T1 4.0000000
+7  Purcell Wilderness Conservancy Park 2014             T2 2.0000000
+8  Purcell Wilderness Conservancy Park 2014             T3 5.0000000
+9  Purcell Wilderness Conservancy Park 2014             T4 1.0000000
+10 Purcell Wilderness Conservancy Park 2014             T5 2.0000000
+11 Purcell Wilderness Conservancy Park 2015             T1 2.6666667
+12 Purcell Wilderness Conservancy Park 2015             T2 2.0000000
+13 Purcell Wilderness Conservancy Park 2015             T3 2.3333333
+14 Purcell Wilderness Conservancy Park 2015             T4 1.3333333
+15 Purcell Wilderness Conservancy Park 2015             T5 1.0000000</code></pre>
+</div>
+</div>
+<div class="cell">
+
+</div>
+</section>
+</section>
+<section id="single-site-analysis" class="level1" data-number="3">
+<h1 data-number="3"><span class="header-section-number">3</span> Single Site Analysis</h1>
+<p>Date for the Purcell are available from 2013 to 2015.</p>
+<p>This design has multiple transects that are repeated measured over time with multiple plots measured on each transect that are also repeated measured over time. Please refer to the Fitting Trends with Complex Study Designs document in the CommonFile directory for information on fitting trends with complex study designs.</p>
+<p>All analyses were done using the R (R Core Team, 2022) analysis system. All plots are also saved as separate *png files for inclusion into other reports.</p>
+<section id="calls." class="level2" data-number="3.1">
+<h2 data-number="3.1" class="anchored" data-anchor-id="calls."><span class="header-section-number">3.1</span> Calls.</h2>
+<p>The data is first summarized to the transect-year level by finding the mean number of calls on a transect over multiple visitss for each individual transect. This reduces the data to one measurement per transect per site/year. It is implicitly assumed that all transects are run on all days within a so every transect has the same number of days of measurement. If transects are changed over time, that is not a problem, but transects should not be introduced or removed part way through a year.</p>
+<p>A summary plot of the mean number of calls on each transect is shown in <a href="#fig-call-prelim">Figure&nbsp;1</a>.</p>
+<div class="cell">
+<div class="cell-output-display">
+<div id="fig-call-prelim" class="quarto-figure quarto-figure-center anchored">
+<figure class="figure">
+<p><img src="squirrel-single-site_files/figure-html/fig-call-prelim-1.png" class="img-fluid figure-img" width="672"></p>
+<p></p><figcaption class="figure-caption">Figure 1: Summary plot of the data. Because the typical counts are small, the data is analyzed on the logarithmic scale.</figcaption><p></p>
+</figure>
+</div>
+</div>
+</div>
+<p>There is evidence of a transect effect, where, for example, the number of calls at certain transects is generally higher than at the other transects because of local transect-specific conditions (e.g.&nbsp;better habitat).</p>
+<p>Because this is count data, a linear mixed model is fit to the logarithm of the mean calls per transect. The model is:</p>
+<p><span class="math display">\[log(AvgCalls) \sim Year + TransectF(R) + YearF(R)\]</span></p>
+<p>where</p>
+<ul>
+<li><span class="math inline">\(log(AvgCalls)\)</span> is logarithm of the average number of calls for that transect in that year;</li>
+<li><span class="math inline">\(TransectF(R)\)</span> represents the (random)transect effect;</li>
+<li><span class="math inline">\(YearF(R)\)</span> represents the (random) year-specific effects (process error), and</li>
+<li><span class="math inline">\(Year\)</span> represents the calendar year trend over time.</li>
+</ul>
+<p>The <span class="math inline">\(TransectF\)</span> term allows for the fact that transect-specific conditions may tend to affect the counts on this transect consistently over time. The <span class="math inline">\(YearF\)</span> term represent the year-specific effects (process error) caused by environmental factors (e.g., a warmer than normal year may elict more calls from squirrels).</p>
+<p>Model fit on the logarithmic scale assume that effects are multiplicative over time, so that the when the actual fit is done on the logarithmic scale, the trends are linear. For example, a trend may assume that there is constant 5% change over time rather than a fixed 1-unit change per year. Some caution is needed if any of the values are 0 as log(0) is not defined. In these cases, a small constant (typically ½ of the smallest positive value in the dataset) is added to all values before the analysis proceeds.</p>
+<p>The model was fit using the <em>lmer()</em> function in <em>R</em>.</p>
+<div class="cell">
+<div class="cell-output cell-output-stderr">
+<pre><code>boundary (singular) fit: see help('isSingular')</code></pre>
+</div>
+</div>
+<p><a href="#fig-count-trend">Figure&nbsp;2</a> shows a summary plot, along with estimates of the slope, its standard error, and the p-value of the hypothesis of no trend. With 3 years of data, the estimated slope on the logarithmic scale is -0.258 (SE 0.132) calls/year (p = 0.083).</p>
+<p>This corresponds to an approximate exp(-0.258)=0.77x multiplicative change/year, i.e.&nbsp;the mean count in year <span class="math inline">\(t=1\)</span> is about 0.77x the mean count in year <span class="math inline">\(t\)</span>. Because the analysis is done on the logarithmic scale, the fitted trend line looks non-linear on the original (non-transformed) scale.</p>
+<div class="cell">
+<div class="cell-output-display">
+<div id="fig-count-trend" class="quarto-figure quarto-figure-center anchored">
+<figure class="figure">
+<p><img src="squirrel-single-site_files/figure-html/fig-count-trend-1.png" class="img-fluid figure-img" width="672"></p>
+<p></p><figcaption class="figure-caption">Figure 2: Summary plot of the trend in mean squirrel counts. Because Poisson regression operates on the logarithmic scale, the fitted trend line is not a straight line but curved.</figcaption><p></p>
+</figure>
+</div>
+</div>
+</div>
+<p><strong>Need to make dynamic</strong> The reason why the p-value is so large given that the standard errors are small relative to the estimated slope is because there are only 3 years of data and after fitting the line there is only 1 degree of freedom available to estimate the multiplier for the confidence intervals. With 1 degree of freedom, the multiplier is much larger than the usual value of 2 used to convert standard errors to confidence intevals.</p>
+<div class="cell">
+<div class="cell-output-display">
+<div id="fig-count-resid" class="quarto-figure quarto-figure-center anchored">
+<figure class="figure">
+<p><img src="squirrel-single-site_files/figure-html/fig-count-resid-1.png" class="img-fluid figure-img" width="672"></p>
+<p></p><figcaption class="figure-caption">Figure 3: Model fit diagnostic plots from trend in mean berry weight</figcaption><p></p>
+</figure>
+</div>
+</div>
+</div>
+<p>Residual plots are presented in <a href="#fig-count-resid">Figure&nbsp;3</a>. With only 3 years of data, the plots are not very informative. In the upper left corner is a plot of residuals vs.&nbsp; the fitted values. A good plot will show a random scatter around 0. Any large deviations from 0 should be investigated as potential outliers. In the upper right is a normal probability plot. Points should be close to the dashed reference line. Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. Caterpiller plots attempt to show the distribution of the random effects. The bottom left plot shows the distribution of the transect effects. The bottom right plot shows the distribution of the year-specific effects (process variation). In this case, the estimated process variation is very small with most of points very close to 0.</p>
+<p>It will also be possible to covariates such as mean winter temperature or degree days in the year to try and explain some of the variation over time using a multiple regression. If there is only a small number of years of data available, this may not sensible.</p>
+<div class="cell">
+
+</div>
+<p>Whenever an analysis of a trend over time is conducted, the analysis should test and adjust for autocorrelation. Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. The test for autocorrelation commonly used is the Durbin-Watson test and we find p = 0.472 for the test of no autocorrelation.</p>
+<p>This model used the approximate analysis on the logarithm of the average counts per transect. It is possible to analyze the actual raw counts using a generalized linear mixed model – this was not done in this example because of the extreme smallness of the dataset. Once many more years are collected, this may be an alternative analysis that will more naturally deal with 0 counts without having to add a small constant.</p>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    target: function(trigger) {
+      return trigger.previousElementSibling;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    setTimeout(function() {
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn) {
+    const config = {
+      allowHTML: true,
+      content: contentFn,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start'
+    };
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      let href = ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const cites = ref.parentNode.getAttribute('data-cites').split(' ');
+    tippyHover(ref, function() {
+      var popup = window.document.createElement('div');
+      cites.forEach(function(cite) {
+        var citeDiv = window.document.createElement('div');
+        citeDiv.classList.add('hanging-indent');
+        citeDiv.classList.add('csl-entry');
+        var biblioDiv = window.document.getElementById('ref-' + cite);
+        if (biblioDiv) {
+          citeDiv.innerHTML = biblioDiv.innerHTML;
+        }
+        popup.appendChild(citeDiv);
+      });
+      return popup.innerHTML;
+    });
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+</body></html>
