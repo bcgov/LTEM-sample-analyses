@@ -10,7 +10,7 @@ library(ggplot2)   # for plotting
 library(plyr)      # split-apply-combine paradigm
 library(reshape2)  # for melting
 library(lmerTest)  # for a linear mixed model with p-values
-library(lsmeans)   # for comparing the trends
+library(emmeans)   # for comparing the trends
 
 
 # Create some fake data to illustrate the fitting concepts
@@ -234,8 +234,8 @@ summary(avg.fit)
 VarCorr(avg.fit)
 
 # Get the individual slopes and the cld
-avg.fit.lsmo <- lsmeans::lstrends(avg.fit, "Study.AreaF", var="Year")
-lsmeans::cld(avg.fit.lsmo)
+avg.fit.emmo <- emmeans::emtrends(avg.fit, "Study.AreaF", var="Year")
+emmeans::cld(avg.fit.emmo)
 
 
 
@@ -251,8 +251,8 @@ anova(re.fit, dfm='kenward-roger')
 summary(re.fit)
 VarCorr(re.fit)
 
-re.fit.lsmo <- lsmeans::lstrends(avg.fit, "Study.AreaF", var="Year")
-lsmeans::cld(re.fit.lsmo)
+re.fit.emmo <- emmeans::emtrends(avg.fit, "Study.AreaF", var="Year")
+emmeans::cld(re.fit.emmo)
 
 
 #---------------------------------------

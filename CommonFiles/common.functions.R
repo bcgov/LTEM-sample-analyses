@@ -1,5 +1,20 @@
+# This function can be used to save diagnostic plots created by autoplot() in ggfortify
+# There currently is a bug where you cannot save the diagnostic plots
+# See see https://github.com/sinhrks/ggfortify/issues/98 for bug in autoplot
+ggsave.ggmultiplot <- function(plot, file=NULL, height=4, width=6, units="in", dpi=300){
+  #browser()
+  require(grid)
+  png(file=file, height=height, width=width, units=units, res=dpi)
+  grid::grid.draw(plot)
+  dev.off()
+  invisible()
+}
+
+
+# Create residual and other diagnostic plots from lmer() objects.
 sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
   # which = TRUE implies select all plots; specify a vector if only want some of the plots
+  require(broom.mixed)
   require(ggplot2) 
   require(grid)
   require(gridExtra)
@@ -32,7 +47,7 @@ sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
         p <- p + xlab("Standard normal quantiles") + ylab("Random effect quantiles")
       } else {  ## caterpillar dotplot
         p <- ggplot(pDf, aes(ID, y)) + coord_flip()
-        if(likeDotplot) {  ## imitate dotplot() -> same scales for random effects
+        if(likeDotplot) {  ## imitate dotplot()  - same scales for random effects
           p <- p + facet_wrap(~ ind)
         } else {           ## different scales for random effects
           p <- p + facet_grid(ind ~ ., scales="free_y")
@@ -52,7 +67,8 @@ sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
   }
   
   
-  df <- fortify(model)
+  df <- broom::augment(model)
+  #df <- fortify(model)
   df <- cbind(df, rows=1:nrow(df))
   
   # residuals vs fitted
@@ -93,4 +109,5 @@ sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
   gridplots <- do.call(arrangeGrob, plots.subset)
   gridplots  # return the final object
 }
+
 
