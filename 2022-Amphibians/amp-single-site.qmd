@@ -1,0 +1,887 @@
+---
+# This script will demonstrate how to analyze the amphibian data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+
+#
+# Only one study area at time can only be analyzed with a script. 
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2020-11-25 Created quatro document
+# 2017-03-27 Separated egg mass by species. Imputed 0 counts when species not seen in a year
+# 2017-02-28 First Edition
+
+# Summary of calling protocol
+#    Define a survey transect along or through your wetland. … 
+#    Surveyors visit the monitoring site(s) in spring and listen for calling males, 
+#    recording the species and approximate number of each. 
+#    Repeat surveys increase the probability that species will be detected.”
+
+# Summary of visual protocol
+#    Surveyors monitor breeding site(s) during the active season (spring to fall),
+#    walking the shoreline of a wetland recording all species and life stages 
+#    encountered. These include egg masses, tadpoles and adults. 
+#    Repeat surveys increase the probability that species will be detected.”
+
+# A separate analysis is done on EACH species present
+
+title: "`r paste0('Amphibians - LTEM - ',params$Study.area.name)`" 
+format: 
+  html:
+    toc: true
+    number-sections: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+
+params:
+  Study.area.name: "Alice Lake"
+
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# load libraries
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(reshape2)  # for melting and casting
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+```
+
+
+# Summary of Amphibian LTEM protocol
+
+## Basic protocol
+
+There are two protocols – calls and visual surveys.
+
+As taken from the protocol document for call surveys:
+
+> “Define a survey transect along or through your wetland. … 
+> Surveyors visit the monitoring site(s) in spring and listen for calling males, 
+> recording the species and approximate number of each. 
+> Repeat surveys increase the probability that species will be detected.”
+
+As taken form the protocol document for visual surveys:
+
+> “Surveyors monitor breeding site(s) during the active season (spring to fall), 
+> walking the shoreline of a wetland recording all species and life stages encountered. 
+> These include egg masses, tadpoles and adults. 
+> Repeat surveys increase the probability that species will be detected.”
+
+The data collected under this protocol at each survey consists of:
+
+-	Species. The species of amphibian counted.
+-	Life Stage. The life stage of the species. 
+-	Count. The number of amphibians at this lifestage.
+
+
+
+## Cautions about the protocol.
+
+### Don’t use 0 to indicate a missing value.
+
+If no species were seen during a visit, this is indicated by the
+lack of a record for that visit. 
+It will be necessary to assume that all species will have been searched 
+for at each visit and that lack of count for a species implies 
+it was searched for and not seen, rather than the observed 
+did not know how to identify the species.
+
+It is unclear how NO amphibians of species will be recorded in the database?
+
+If no visit was made to a transect, then there are no records 
+in the General Survey for that transect. 
+One must infer that if there are no records for transect at a date that it was not visited. 
+The Transect Information worksheet only has information on the transect label 
+and not when they were visited. 
+It is preferable to include in this sheet the visit dates of each transect 
+in that year explicitly rather than trying to infer this information 
+from the General Survey sheet.
+
+**This may have been corrected in the new datasets**
+
+
+## Database structure
+
+The database for this protocol is a series of Excel workbooks 
+with multiple sheets in each workbook. 
+The Transect Information sheet contains the information on the transect 
+available for this year. If a transect is not visited, this is 
+indicated by a no records in the General Survey workseeht. 
+The General Survey sheet contains the information collected. 
+There are multiple lines per visit. 
+If a visit was done but no amphibians were detected, then the species code is set to missing with a count of 0.
+
+The relevant fields on the General Survey worksheet are:
+
+-	Transect Label.
+-	SurveyType. Was this an visual or calling survey?
+-	Date. The date the data was collected. The Year is extracted from this date.
+-	Species. What species were seen
+-	LifeStage. What life stage was counted
+-	Count. Count of the number of amphibians of each species.
+
+
+# Reading and checking the data
+
+The database was read for all record pertaining to the
+`r params$Study.area.name`. The following files were found:
+
+```{r}
+#| echo: false
+
+data.extract <- read.LTEM.data(study.type="Amphibians",
+                                         site.names=params$Study.area.name, sheets="General Survey")
+
+if(length(data.extract$extracted.sheets)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. Check your Study.area.name in the yaml \n")
+    knitr::knit_exit()
+    stop()
+}
+
+cat("File names with the data \n")
+data.extract$files
+```
+
+These workbooks were read using *R*:
+
+```{r}
+#| echo: false
+
+# read each workbook and put all of the data together into one big data frame
+amph.df <- data.extract$extracted.sheets$"General Survey"
+
+
+```
+
+The following data editing was performed
+
+## Variables names corrected for *R*
+
+Variable names in *R* must start with a letter and contain letters or numbers or underscores.
+Blanks in variable names are not normally allowed, nor are special characters such as %.
+These are normally replaced by periods (".") in the variable name.
+
+```{r}
+#| echo: false
+
+#------------ Data Editing -----------
+# fix up variable names in the data.frame.
+# Variable names in R must start with a letter and contain letters or number or _. 
+# Blanks in variable names are not normally allowed. Blanks will be replaced by . (period)
+cat("\nOriginal variable names in data frame\n")
+names(amph.df)
+
+names(amph.df) <- make.names(names(amph.df))
+
+cat("\nCorrected variable names of data frame\n")
+names(amph.df)
+```
+
+## Dates converted to standardized form
+
+```{r}
+#| echo: false
+#| 
+# Convert dates to R date format
+
+# Convert dates to R date format
+#xtabs(~Date, data=amph.df, exclude=NULL, na.action=na.pass)  # check the date formats. Make sure that all yyyy-mm-dd
+
+amph.df$Date.new<- as.Date(amph.df$Date)  # readxl converts dates
+
+select <- is.na(amph.df$Date.new)
+if(any(select)){
+   cat("*** ERROR *** Some dates appear to be invalid \n")
+   amph.df[select, c("Study.area.name","Transect.label","Date","Date.new")]
+   stop()
+}
+
+amph.df$Date <- amph.df$Date.new
+
+amph.df$Year <- as.numeric(format(amph.df$Date, "%Y"))
+
+cat("\n\nThe number of records by year are \n")
+xtabs(~Study.area.name+Year, data=amph.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+
+if(length(unique(amph.df$Year))<3){
+    # insufficient data extracted
+    cat("\n\n\n*** ERROR *** Less than 3 years of data. No analysis possible \n")
+    knitr::knit_exit()
+    stop()
+}
+```
+
+## Checking Study Area Name
+
+The Study Area Name should be recorded consistently across years, otherwise 
+it may indicate that different sites are being studies. The study area name
+is converted to Title Case.
+
+The list of Study Area Names by year in the data is:
+
+```{r}
+#| echo=FALSE
+
+# Check that the Study Area Name is the same across all years
+# Look at the output from the xtabs() to see if there are multiple spellings 
+# of the same Study.area.name.
+
+# We will convert the Study.area.name to Proper Case.
+amph.df$Study.area.name <- stringr::str_to_title(amph.df$Study.area.name)
+xtabs(~Study.area.name+Year, data=amph.df, exclude=NULL, na.action=na.pass)
+
+if(!all(grepl(params$Study.area.name, amph.df$Study.area.name, ignore.case=TRUE))){
+  cat("*** ERROR *** Study.area.names are not consistent\n")
+  cat("A tabulation of Study.area.names in datasets is \n")
+  xtabs(~Study.area.name, data=amph.df, exclude=NULL, na.action=na.pass)
+  cat("Requested study area was ", params$Study.area.name,  "\n")
+  stop("Input data is not all from ", params$Study.area.name)
+}
+
+if(length(unique(amph.df$Study.area.name))>1){
+   cat("*** ERROR *** More than one study area found \n")
+   cat("\n\nThe number of records by year are \n")
+   xtabs(~Study.area.name+Year, data=amph.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   stop()
+}
+
+```
+
+You should also check the transect labels for typos, e.g., inconsistencies
+across years. This is difficult to automate and needs a human touch.
+
+```{r}
+#| echo=FALSE
+
+# Check the Transect.labels for typos
+xtabs(~Study.area.name+Transect.label, data=amph.df, exclude=NULL, na.action=na.pass)
+xtabs(~Transect.label+Year,            data=amph.df, exclude=NULL, na.action=na.pass)
+```
+
+
+## Checking species code
+
+The species code should be the same across the files.
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~Species, data=amph.df, exclude=NULL, na.action=na.pass)
+xtabs(~Species+Year, data=amph.df, exclude=NULL, na.action=na.pass)
+
+if(length(unique(amph.df$Species))>1){
+   cat("*** WARNING *** More than one species name found \n")
+   cat("\n\nThe number of records by species and year are \n")
+   xtabs(~Species+Year, data=amph.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   #stop()
+}
+
+```
+
+## Check the detection type field
+
+The detection types should be one of *AU* (audio) or *VI* (visual)
+
+```{r}
+#| echo: false
+#! error: true
+
+# Convert survey type to upper case
+amph.df$Detect.type <- toupper(amph.df$Detect.type)
+
+# Check the survey type fiels
+xtabs(~Year+Detect.type,  data=amph.df, exclude=NULL, na.action=na.pass)
+
+if(any(!amph.df$Detect.type %in% c("AU","VI"))){
+   cat("*** ERROR *** Invalid survey types values (should be AU or VI) \n")
+   cat("\n\nCheck the previous table \n")
+   knitr::knit_exit()
+   stop()  
+}
+
+```
+
+## Check the Life Stage Code
+
+The Life Stage codes should be one of *AD*, *EG* or *LA*.
+
+```{r}
+#| echo: false
+
+# Convert survey type to upper case
+amph.df$Life.Stage <- toupper(amph.df$Life.Stage)
+
+# Check the survey type fiels
+xtabs(~Year+Life.Stage,  data=amph.df, exclude=NULL, na.action=na.pass)
+
+if(any(!amph.df$Life.Stage %in% c("AD","EG", "LA"))){
+   cat("*** ERROR *** Invalid survey types values (should be AD, EG, LA) \n")
+   cat("\n\nCheck the previous table \n")
+   knitr::knit_exit()
+   stop()  
+}
+
+```
+
+
+## Check the comments
+
+The comments recorded should be reviewed in case these indicate problems with the data,
+
+
+```{r}
+#| echo: false
+
+# check other comments. You may need to adjust the data to account for 
+# problems in the data. 
+amph.df$Comments.short <- substr(amph.df$Comments,1,30)
+amph.df[ amph.df$Comments != "" & !is.na(amph.df$Comments), c("Year","Comments.short")]
+```
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+file.prefix <- make.names(amph.df$Study.area.name[1])
+file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert blanks to -
+file.prefix <- file.path("Plots", file.prefix)
+```
+
+
+# Single Site Analysis
+
+Date for the `r params$Study.area.name` are available from `r min(amph.df$Year, na.rm=TRUE)` to 
+`r max(amph.df$Year, na.rm=TRUE)`. 
+
+
+This design could have multiple transects that are repeatedly measured 
+over time with multiple plots measured on each transect that are also 
+repeatedly measured over time. 
+Please refer to the Fitting Trends with Complex Study Designs document in the 
+CommonFile directory for information on fitting trends with complex study designs. 
+For the Alice Lake Example, there is only one transect which 
+simplifies the analysis considerably. 
+
+All analyses were done using the R (R Core Team, 2022)  analysis system. 
+The *R* code is general enough that if more than one transect is present, 
+it will automatically choose the more complex linear mixed models as seen in the other protocols.
+All plots are also saved as separate *png files for inclusion into other reports.
+
+## Calling Data
+
+According to the protocol, the approximate number of calls 
+heard during the visit should be recorded. 
+This is not available in the data base, only presence data is recorded. 
+Given that only 1 station was visited in Alice Lake with 2 visits in 2013 
+and 1 visit in 2014, no analysis on presence/absence is possible at this time. 
+A logistic regression analysis may be possible if multiple 
+stations are visited in each year and presence/absence of sounds is recorded. 
+
+The usual protocol for aural surveys is an occupancy study to deal 
+with the problem of false negatives (Mackenzie et al 2005). 
+In this protocol, multiple stations are visited multiple times 
+and the pattern of detection at each station is used to infer the probability of detection and hence to adjust for false negatives.
+
+## Visual Data - Number of Egg Masses
+
+This analysis will look at trend in the total number of 
+detected egg masses (for each species, and over all species). 
+The current data is extremely sparse at the species level and likely to be uninformative.
+
+A key problem with this protocol is the emphasis in the previous paragraph on detected. 
+It is not possible to count all of the egg masses laid in the study area; 
+it is also unlikely that all egg masses along the (fixed) transects will be 
+detected in each year. 
+Consequently, it is necessary to make the **VERY STRONG** 
+assumption that detectability is constant over time for each transect. 
+This may be violated, for example, when different numbers of visits 
+are made across years on the same transect (e.g. two visits were made in 2013, 
+while only one visit was made in 2014 and 2015). 
+Presumably, if more visits are made to a transect, then more egg masses may be detected.
+
+We also need to make the strong assumption that egg masses are 
+not double counted across multiple visits to the same transect. 
+There is no information stored on the database on the exact 
+location where an egg mass was located so it is difficult to verify this information.
+
+Even if the above assumptions are satisfied, the number of observed 
+egg masses is only an **INDEX** to the population number of egg masses.
+
+The data is first summarized to the year level 
+for each transect counting the number of records that identify an egg mass. 
+This reduces the data to one measurement per transect per site/year. 
+
+We first need to impute 0 values for a species if not listed
+as being detected in a year.
+
+```{r}
+#| echo: false
+
+# Must impute 0 values for species not present in a year
+
+#dim(amph.df)
+amph.v.df <- amph.df[ amph.df$Detect.type=='VI',]
+#dim(amph.v.df)
+
+# Count the total number of egg masses seen by species
+eggmass.count.by.species <- plyr::ddply(amph.v.df,
+                                  c("Study.area.name","Transect.label","Year","Species"),
+                                  plyr::summarize,
+                       n.eggmass=sum(Life.Stage=='EG'))
+cat("The number of egg masses counted by species \n")
+eggmass.count.by.species
+
+# Count the total number of egg masses seen for ALL species
+eggmass.count.by.species <- plyr::ddply(amph.v.df,
+                                    c("Study.area.name","Transect.label","Year","Species"), 
+                                    plyr::summarize,
+                       n.eggmass=sum(Life.Stage=='EG'))
+eggmass.count.all.species <- plyr::ddply(amph.v.df, 
+                                         c("Study.area.name","Transect.label","Year"), 
+                                         plyr::summarize,
+                       n.eggmass=sum(Life.Stage=='EG'))
+eggmass.count.all.species$Species <- 'ALL.species'
+
+eggmass.count <- rbind(eggmass.count.by.species, eggmass.count.all.species)
+
+
+
+# Need to impute 0 values for species not seen in a year
+
+# check out records where eggmass count not identified
+select <- eggmass.count$Species %in% c("AMPHIBION","Unidentifed") # Notice type in unidentified
+eggmass.count[ select,]
+
+eggmass.count <- eggmass.count[ !select, ] 
+
+
+# Create a record for each species x each year
+complete.species.year <- expand.grid(Study.area.name=unique(eggmass.count$Study.area.name),
+                                     Transect.label =unique(eggmass.count$Transect.label),
+                                     Species=unique(eggmass.count$Species),
+                                     Year   =unique(eggmass.count$Year,  stringsAsFactors=FALSE))
+eggmass.count <- merge(complete.species.year, eggmass.count, all.x=TRUE)
+
+# replace all NA by 0
+eggmass.count$n.eggmass[ is.na(eggmass.count$n.eggmass)] <- 0
+
+# check that every species is given in each year
+cat("A summary of the egg-masses seen by species and year is \n")
+xtabs(n.eggmass~Species+Year, data=eggmass.count, exclude=NULL, na.action=na.pass)
+```
+
+A summary plot of the (reduced) data is shown in @fig-em-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the number of egg masses seen during VI count."
+#| label: fig-em-prelim
+#| warning: false
+#| message: false
+
+# Make a preliminary plot of total count by date
+prelim.egg.plot <- ggplot(data=eggmass.count, aes(x=Year, y=n.eggmass, color=Transect.label, linetype=Transect.label))+
+   ggtitle("Amphibian egg mass count data")+
+   ylab("Amphibian egg masses")+
+   geom_point(position=position_dodge(width=.5))+
+   geom_line( position=position_dodge(width=.5))+
+   facet_wrap(~interaction(Study.area.name,Species), ncol=2, scales="free_y")+
+   scale_x_continuous(breaks=min(eggmass.count$Year,na.rm=TRUE):max(eggmass.count$Year,na.rm=TRUE))+
+   scale_y_continuous(breaks=1:100)
+prelim.egg.plot 
+ggplot2::ggsave(plot=prelim.egg.plot, 
+       file=paste(file.prefix,'-plot-prelim-egg.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+```
+
+
+
+If a single transect is done in each year, a (quasi)-Poisson generalized linear model
+is fit. The quasi-Poisson model accounts for potential overdispersion.
+The model is:
+$$NEggMasses = Year$$
+where
+
+- $NEggMasses$ is the count for that transect in a year; and 
+- $Year$ represents the calendar year trend over time.  
+
+This model assume that effects are multiplicative over time, 
+so that the actual fit is done on the logarithmic scale. 
+For example, a trend may assume that there is constant 5% change 
+over time rather than a fixed 1 unit change per year. 
+An approximate analysis could be done using regular linear regression 
+if you analyze the log(NEggMass+.5), where the offset of 0.5 is use to avoid taking 
+$log(0)$. 
+
+
+If there are multiple transects, a mixed linear model is fit (in the standard notation)
+on the logarithmic scale. This will automatically account for overdispersion.
+$$log(NEggMasses+.5) = Year + Transect.label(R) + YearF(R))$$
+
+where 
+
+- $Transect.label(R)$ is the (random) transect-specific effects;
+- $YearF(R)$ is the year-to-year proccess error.
+
+These models are fit using the *glm()* or *lmer()* functions in *R* respectively
+and results summarized in @fig-em-summary.
+
+
+```{r}
+#| echo: false
+
+
+
+#eggmass.count2 <- eggmass.count
+#eggmass.count2$Transect.label ='xx'
+#eggmass.count2$n.eggmass <- rpois(1, eggmass.count$n.eggmass)
+#eggmass.count2
+#eggmass.count <- rbind(eggmass.count, eggmass.count2)
+
+
+# This is a regression analysis with Year as the trend variable 
+# In this case, there is only one transect, 
+# so it is not necessary to have the Transect.label in the model
+# We also don't need to model process (year specific effects) because there is only 1 transect
+
+# Fit a linear regression for each species 
+fits<- dlply(eggmass.count, "Species", function(eggmass.count){
+   cat("\n\n\n *** Starting analysis for species ", as.character(eggmass.count$Species[1]), "\n")
+   if(length(unique(eggmass.count$Transect.label))>1){
+      eggmass.count$Transect.labelF <- factor(eggmass.count$Transect.label)
+      eggmass.count$YearF           <- factor(eggmass.count$Year)
+      egg.fit <- lmerTest::lmer(log(n.eggmass+.5) ~ Year + (1|Transect.labelF) + (1|YearF) ,
+                                data=eggmass.count)
+      print(anova(egg.fit, ddf='kenward-roger'))
+      print(summary(egg.fit))
+      print(VarCorr(egg.fit))
+   }
+   if(length(unique(eggmass.count$Transect.label))==1){
+       # with only 1 transect, not necessary to put random effects effect in the model
+       egg.fit <- glm(n.eggmass ~  Year , data=eggmass.count, family=quasipoisson)
+       print(Anova(egg.fit, test="F", type=3))
+       print(summary(egg.fit))
+   }
+   list(Species=eggmass.count$Species[1], fit=egg.fit)
+})
+```
+
+
+```{r}
+#| echo: false
+
+# extract a table of statistics for each study area x species combiations
+egg.slopes <- plyr::ldply(fits, function(x){
+  eggmass.count <- x$fit$data
+  egg.fit       <- x$fit
+  if(length(unique(eggmass.count$Transect.label))==1){
+     egg.slopes <- data.frame(
+        Study.area.name =eggmass.count$Study.area.name[1],
+        slope    = coef(egg.fit)["Year"],
+        slope.se = sqrt(diag(vcov(egg.fit)))["Year"],
+        p.value  = summary(egg.fit)$coefficients[row.names(summary(egg.fit)$coefficients)=="Year"  ,"Pr(>|t|)"],
+        stringsAsFactors=FALSE
+     )
+   }
+   if(length(unique(eggmass.count$Transect.label))>1){
+     egg.slopes <- data.frame(
+          Study.area.name =eggmass.count$Study.area.name[1],
+          slope           = fixef(egg.fit)["Year"],
+          slope.se        = summary(egg.fit)$coefficients["Year","Pr(>|t|)"],
+          p.value         = summary(egg.fit)$coefficients[row.names(summary(egg.fit)$coefficients)=="Year"  ,"Pr(>|t|)"], 
+          stringsAsFactors=FALSE)
+   }
+   egg.slopes
+})
+#egg.slopes
+
+
+# compute the fitted values from the model
+egg.fitted <- ldply(fits, function(x){
+   eggmass.count <- x$fit$data
+   egg.fit       <- x$fit
+   Transect.label <- unique(as.character(eggmass.count$Transect.label))
+   newdata <- expand.grid(Year=seq(min(eggmass.count$Year, na.rm=TRUE),max(eggmass.count$Year, na.rm=TRUE), .1),
+                          Transect.labelF=Transect.label)
+   newdata$Transect.label <-as.character(newdata$Transect.labelF)
+   if(length(unique(eggmass.count$Transect.label))==1){
+      newdata$pred.mean <- predict(egg.fit, newdata=newdata,type="response")
+   }
+   if(length(unique(eggmass.count$Transect.label))>1){
+      newdata$pred.mean <- exp(predict(egg.fit, newdata=newdata,type="response", re.form=~0))
+   }
+   # we now must average over all of the transect labels
+   egg.fitted <- plyr::ddply(newdata, c("Year","Transect.label"), plyr::summarize, pred.mean=mean(pred.mean))
+   egg.fitted$Study.area.name <- eggmass.count$Study.area.name
+   egg.fitted
+})
+#egg.fitted
+```
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in number of egg masses. Because the analysis was done on the logarithmic scale, the fitted trend line is not a straight line but curved."
+#| label: fig-em-summary
+#| warning: false
+#| message: false
+
+# Plot with trend line 
+egg.plot.summary <- ggplot2::ggplot(data=eggmass.count,
+                                    aes(x=Year, y=n.eggmass))+
+   ggtitle("Amphibian eggmass count ")+
+   ylab("Amphibian Eggmass Count")+
+   geom_point(size=3, aes(color=Transect.label))+
+   facet_wrap(~interaction(Study.area.name,Species), ncol=2, scales="free_y")+
+   geom_line(data=egg.fitted, aes(x=Year,y=pred.mean))+
+   scale_x_continuous(breaks=min(eggmass.count$Year,na.rm=TRUE):max(eggmass.count$Year,na.rm=TRUE))+
+   geom_text(data=egg.slopes, aes(x=min(eggmass.count$Year, na.rm=TRUE), y=max(eggmass.count$n.eggmass, na.rm=TRUE)), 
+             label=paste("Slope (on log scale) : ",round(egg.slopes$slope,2), 
+                         " ( SE "  ,round(egg.slopes$slope.se,2),")",
+                         " \np :"    ,round(egg.slopes$p.value,3)),
+                         hjust="left",vjust="top")+
+   theme(legend.position="top")
+egg.plot.summary
+ggsave(plot=egg.plot.summary, 
+       file=paste(file.prefix,'-egg-plot-summary.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+The estimated slopes for each species and for all species pooled are:
+
+```{r}
+#| echo: false
+
+egg.slopes
+
+```
+
+**Format this table nicer**
+
+Because the analysis is done on the logarithmic scale, the
+interpretation of the slopes is straight forward. For example, if the estimated
+slope is .02, then the number of eggmasses is estimated to be increasing by 2%/year.
+
+
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in egg masses"
+#| label: fig-em-resid
+#| warning: false
+#| message: false
+
+
+# Get the model diagnostic plots
+l_ply(fits, function(x){
+    cat("\n\n\n *** Diagnostic plot for species ", as.character(x$Species), "\n")
+   if(length(unique(x$fit$data$Transect.label))>1){
+      diag.plot <- sf.autoplot.lmer(x$fit)  # residual and other diagnostic plots
+      plot(diag.plot)
+   }
+   if(length(unique(x$fit$data$Transect.label))==1){
+      diag.plot <- autoplot(x$fit)  # residual and other diagnostic plots
+      show(diag.plot)
+   }
+   ggplot2:: ggsave(#plot=diag.plot, 
+          file=paste(file.prefix,"-egg-residual-plot-",x$Species,".png",sep=""),
+          h=6, w=6, units="in", dpi=300)
+})
+```
+
+**Need to label the residual plots by species**
+
+Residual plots are presented in (@fig-em-resid).
+With only `r length(unique(amph.v.df$Year))` years of data, 
+the plots are not very informative. In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality 
+so only extreme departures are worrisome. 
+The bottom left plot examine the assumption that the variation 
+about the line is constant over the line. 
+You would expect to see a constant band of points. 
+Finally the bottom right plot is a leverage plot – this is not useful for this simple model and can be ignored. 
+
+It will also be possible to covariates such as mean winter temperature 
+or degree days in the year to try and explain some of the variation over time 
+using a multiple regression. With only `r length(unique(amph.v.df$Year))`
+years of data available, this not sensible.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+em.ac <- ldply(fits, function(x){
+   #cat("\n\n\n *** Checking for autocorrelation for species ", as.character(x$Species), "\n")
+   eggmass.count <- x$fit$data
+   # check for autocorrelation
+   if(length(unique(eggmass.count$Transect.label))>1){
+      eggmass.count$resid <- log(eggmass.count$n.eggmass) - 
+        predict(x$fit, newdata=eggmass.count, re.form=~0)
+   }
+   #browser()
+   if(length(unique(eggmass.count$Transect.label))==1){
+      eggmass.count$resid <- log(eggmass.count$n.eggmass+.1) - 
+        predict(x$fit, newdata=eggmass.count, type="link")
+   }
+   mean.resid <- plyr::ddply(eggmass.count, "Year", summarize, mean.resid=mean(resid))
+   resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+   dwres1 <- car::durbinWatsonTest(resid.fit)
+   #print(dwres1)
+   dwres2 <- lmtest::dwtest(resid.fit)
+   #print(dwres2)
+   #browser()
+   data.frame(ac=dwres1$r,
+              ac.p.value=insight::format_p(dwres1$p))
+})
+```
+
+Whenever an analysis of a trend over time is conducted, the analysis 
+should test and adjust for autocorrelation. 
+Autocorrelation usually isn’t a problem (and likely cannot be detected) 
+unless you have 10+ years of data. 
+The test for autocorrelation commonly used is the Durbin-Watson test and the following table
+is a summary of the results.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated autocorrelation"
+#| 
+ft <- flextable(em.ac)
+ft <- colformat_double(ft, j="ac", digits=2)
+ft <- set_header_labels(ft, "ac"="Autocorrelation", "ac.p.value"="P-value")
+ft <- set_table_properties(ft, layout = "autofit")
+ft <- set_caption(ft, caption="Estimated autocorrelation")
+ft
+```
+
+If there is evidence of autocorrelation (p-value is small) with a postive autocorrelation
+please
+contact me for assistance.
+Negative autocorrelation is not a concern, but indicate a "cyclical" trend
+in population numbers (i.e., high numbers in one year followed by low
+numbers in the next year, and vice versa) which may be of biological interest.
+
+**Make a summary table here**
+
+This analysis was conducted at the total count level (over all species) 
+and also for individual species – but the data are likely to very sparse 
+and not useful for individual species. 
+One potential problem is that in some cases, species information is only 
+recorded at the Genus or higher level.  In these case, this data will have to 
+discarded when the analysis is done at the species level, but then you are 
+making an implicit assumption that recording at the Genus level happens at random 
+and is unrelated to the response. 
+If this assumption is violated (e.g. perhaps when there are larger 
+number of amphibians, it is too difficult to record at the individual species level) 
+then this is not occurring at random and some effort must be made 
+to “split” the genus level information among the species.
+
+In theory, the actual number of eggs in each egg mass could also be 
+used rather simply the number of egg masses. I did not do this analysis 
+because (a) it makes little sense to average the size of the egg mass 
+over the different species and (b) the number of eggs in the egg 
+mass may not represent the total number laid because of unknown amounts of predation.
+
+
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+## Analysis of Visual Data – Number of Adults. 
+A similar analysis can be done on the total number of adult amphibians detected. 
+In Alice Lake there were only a total of 7 frogs detected over the three years 
+– the data is just too sparse to analyze at this time.
+
+# Summary
+Some caution is required to ensure that all transects are visited 
+equally often in a year. 
+In this balanced design, it is straightforward to compute statistics 
+over all measurements of a transect and all transects in a year have the same number of visit. 
+It is possible to modify the analysis is only some transects are visited 
+on a particular date with an unequal number of visits to a transect in a year. 
+A simple way to deal with unbalance would be to delete some of the observations, 
+but better methods are available.
+
+Trends over time could also occur in the diversity of the amphibians. 
+In theory, standard diversity measures could be used and tracked over time, 
+but these have a very strong 
+assumption that all species are equally detectable by the observer. 
+This is unlikely to be true. Secondly, the actual counts are quite small, 
+and diversity measures that rely on actual counts (e.g. Simpson’s diversity) 
+will not perform well. 
+For this reason, I do not recommend an analysis on the diversity of the observations.
+I am extremely dubious that this protocol as implemented 
+will produce any useful monitoring information at the study area level 
+except for disaster detection (e.g. all species vanish). 
+Even then, the absence of a detection does not imply that the species was not present – 
+it could simply be a false negative. 
+The current study does not provide any information to estimate detection probabilities.
+
+As an example of how this protocol could be improved is based on 
+large scale surveys of occupancy. 
+The shoreline would be divided in many (at least 50) segments. 
+On each visit, the presence/absence of amphibians would be recorded at the segment level. 
+Then standard occupancy models could be used to estimate the proportion of 
+segments that are occupied. 
+Changes in the occupancy probability over time would be an 
+indication that the population is increasing/decreasing over time.
+
+Or this particular study area could be embedded into a much larger 
+regional analysis where again, multiple visits are made 
+in a year to estimate detection probabilities and changes in occupancy serve as an index to changes in the population.
+
+
+
+# References
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017). 
+lmerTest Package: Tests in Linear Mixed Effects Models.
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13
+
+MacKenzie, D. I., J. D. Nichols, J. A. Royle, K. H. Pollock, L.L. Bailey, and J. E. Hines. 2005.
+Occupancy Estimation and Modeling - Inferring Patterns and Dynamics of Species Occurrence. 
+Elsevier Publishing. 
+ 
+R Core Team (2022). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. 
+https://www.R-project.org/.
+
+

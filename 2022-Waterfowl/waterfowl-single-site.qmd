@@ -1,0 +1,630 @@
+---
+# This script will demonstrate how to analyze the waterfowl data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+
+# Notice that this example only has 2 years of data. We simulate a third year to illustrate
+# how to do a trend analysis.
+#
+#
+# Only one study area at time can only be analyzed with a script. 
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2022-12-02 Convert to quatro
+# 2017-02-28 First Edition
+
+# Summary of Protocol
+#    Establish observation points at enough sites 
+#    to provide views of the entire survey area. … 
+#
+#    Choose a date after which migrants are mostly gone. 
+#    Count on 3 separate occasions during a 2-3 week period and keep highest count.
+
+title: "`r paste0('Waterfowl - LTEM - ',params$Study.area.name)`" 
+date: '`r format(Sys.time(), "%Y-%m-%d")`'
+format: 
+  html:
+    toc: true
+    number-sections: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+
+params:
+  Study.area.name: "Yellow Point"
+
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# load libraries
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(reshape2)  # for melting and casting
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+```
+
+
+# Summary of Waterfowl LTEM protocol
+
+## Basic protocol
+
+As taken from the protocol document:
+
+> “Establish observation points at enough sites to provide views of the entire survey area. … 
+> 
+> Choose a date after which migrants are mostly gone. Count on 3 separate occasions during a 2-3 week period and keep > highest count.”
+
+The data collected under this protocol at each survey consists of the following variables:
+
+-	Species. The species of waterfowl counted.
+-	Sex. The sex of the species. 
+-	Count. The number of birds of this species and sex. Choose a date after which migrants are mostly gone 
+
+
+## Cautions about the protocol.
+
+### Don’t use 0 to indicate a missing value.
+
+If no species were seen during a visit, this is indicated by 
+the species code being set to missing and the count field being set to 0. 
+This needs to be done consistently over time.
+
+If no visit was made to a station, then there are no records in the *General Survey* worksheet. 
+One must infer that if there are no records for a station at a date, 
+that it was not visited. 
+The *Sample Station Information* worksheet only has information on the station label 
+and not when they were visited. 
+It is preferable to include in this sheet the visit dates of each station 
+in that year explicitly rather than trying to infer this information from the *General Survey* worksheet.
+
+### Classifying by season 
+
+The protocol is silent about seasonal sampling, e.g., spring vs. fall. 
+There is some issue on how to properly pool information that is close 
+together but crosses year boundaries. 
+For example, surveys may be done in late December of 2013 and early January of 2014. 
+If the maximum counts over multiple visits in the winter are collected, 
+visits on these two months need to be “combined” even though they are in different calendar years.
+
+For this analysis we classified by month (November, December, January, February) 
+to avoid this problem
+
+
+
+## Database structure
+
+The database for this protocol is a series of Excel workbooks with multiple sheets in each workbook. 
+The *Sample Station Information* sheet contains the information on the stations available for this year. 
+If a station is not visited, this is indicated by a missing record in the *General Survey* worksheet. 
+The *General Survey* sheet contains the information collected. 
+There are multiple lines per visit. 
+If a visit was done but no birds were seen, then the species code is set to missing with a count of 0.
+
+The relevant fields on the *General Survey* worksheet are:
+
+-	*Sample Location Label*.  **Appears to be changed to Transect Label starting in 2019.
+-	*Date*. The date the data was collected. The *Year* is extracted from this date.
+-	*Species*. What species were seen
+-	*Count*. Count of the number of birds of each species.
+
+
+# Reading and checking the data
+
+```{r}
+#| echo: false
+#| error: true
+# Get the data base information and any corrections here
+waterfowl.extract <- read.LTEM.data(study.type="Waterfowl",
+                                         site.names=params$Study.area.name, sheets="General Survey")
+
+if(length(waterfowl.extract$extracted.sheets)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. Check your Study.Area.Name in the yaml \n")
+    knitr::knit_exit()
+    stop()
+}
+
+
+```
+
+The database was read for all record pertaining to the
+`r params$Study.area.name`. The following files were found for this site:
+
+```{r}
+#| echo: false
+#| 
+cat("File names with the data \n")
+waterfowl.extract$files
+```
+
+```{r}
+#| echo: false
+waterfowl.df <- waterfowl.extract$extracted.sheets$"General Survey"
+```
+
+Notice we needed to fix the *Sample Station Label*.
+
+
+```{r}
+#| echo: true
+# Notice that Sample.station.label was changed to Transect.Label starting in 2018?
+select <- is.na(waterfowl.df$"Sample Station Label")
+waterfowl.df$"Sample Station Label"[select] <- waterfowl.df$"Transect Label"[select]
+
+```
+
+
+The following data editing was performed
+
+## Variables names corrected for *R*
+
+Variable names in *R* must start with a letter and contain letters or numbers or underscores.
+Blanks in variable names are not normally allowed, nor are special characters such as %.
+These are normally replaced by periods (".") in the variable name.
+
+```{r}
+#| echo: false
+
+#------------ Data Editing -----------
+# fix up variable names in the data.frame.
+# Variable names in R must start with a letter and contain letters or number or _. 
+# Blanks in variable names are not normally allowed. Blanks will be replaced by . (period)
+cat("\nOriginal variable names in data frame\n")
+names(waterfowl.df)
+
+names(waterfowl.df) <- make.names(names(waterfowl.df))
+
+cat("\nCorrected variable names of data frame\n")
+names(waterfowl.df)
+```
+
+## Dates converted to standardized form
+
+```{r}
+#| echo: false
+#| 
+# Convert dates to R date format
+# xtabs(~Date, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats.
+waterfowl.df$Date.new<- as.Date(waterfowl.df$Date)
+
+select <- is.na(waterfowl.df$Date.new)
+if(any(select)){
+   cat("*** ERROR *** Some dates appear to be invalid \n")
+   waterfowl.df[select, c("Study.area.name","Sample.station.label","Date","Date.new")]
+   stop()
+}
+
+waterfowl.df$Date <- waterfowl.df$Date.new
+
+waterfowl.df$Year <- lubridate::year(waterfowl.df$Date)
+
+cat("\n\nThe number of records by year are \n")
+xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+
+if(length(unique(waterfowl.df$Year))<3){
+    # insufficient data extracted
+    cat("\n\n\n*** ERROR *** Less than 3 years of data. No analysis possible \n")
+    knitr::knit_exit()
+    stop()
+}
+
+
+```
+
+## Checking Study Area Name
+
+The Study Area Name should be recorded consistently across years, otherwise 
+it may indicate that different sites are being studies. The study area name
+is converted to Title Case.
+
+The list of Study Area Names by year in the data is:
+
+```{r}
+#| echo=FALSE
+
+# Check that the Study Area Name is the same across all years
+# Look at the output from the xtabs() to see if there are multiple spellings 
+# of the same Study.area.name.
+
+# We will convert the Study.area.name to Proper Case.
+waterfowl.df$Study.area.name <- stringr::str_to_title(waterfowl.df$Study.area.name)
+xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+
+if(!all(grepl(gsub(" ","",params$Study.area.name), gsub(" ","",waterfowl.df$Study.area.name), ignore.case=TRUE))){
+  cat("*** ERROR *** Study.area.names are not consistent\n")
+  cat("A tabulation of Study.area.names in datasets is \n")
+  xtabs(~Study.area.name, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+  cat("Requested study area was ", params$Study.area.name,  "\n")
+  stop("Input data is not all from ", params$Study.area.name)
+}
+
+if(length(unique(waterfowl.df$Study.area.name))>1){
+   cat("*** ERROR *** More than one study area found \n")
+   cat("\n\nThe number of records by year are \n")
+   xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   stop()
+}
+
+```
+
+## Checking Station codes
+
+While these are not used in the analysis, these labels should be consistent over time:
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~Study.area.name+Sample.station.label, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+xtabs(~Sample.station.label+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+```
+
+
+## Checking species code
+
+The species code should be the same across the file.
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~Species+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+
+```
+
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+file.prefix <- make.names(waterfowl.df$Study.area.name[1])
+file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert . to 
+if(!dir.exists("PLots"))dir.create("Plots")
+file.prefix <- file.path("Plots", file.prefix)
+```
+
+
+
+# Single Site Analysis
+
+Date for the `r params$Study.area.name` are available from `r min(waterfowl.df$Year, na.rm=TRUE)` to 
+`r max(waterfowl.df$Year, na.rm=TRUE)`. 
+
+This design has multiple stations that are repeatedly measured over time 
+with multiple measurements at each station
+Please refer to the Fitting Trends with Complex Study Designs document in the 
+CommonFile directory for information on fitting trends with complex study designs. 
+
+All analyses were done using the R (R Core Team, 2022)  analysis system. 
+All plots are also saved as separate *png files for inclusion into other reports.
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#  Analysis of the number of maximum (total) count by month.
+```
+
+
+## Maximum counts
+
+The data is first summarized to the date level by summing the count over multiple records 
+(the different species) for each date-sample station combination. 
+This reduces the data to one measurement per date per site/year. 
+
+A preliminary plot of the total count is found in @fig-wf-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. Data is plotted on the logarithmic scale because of the wide range of values. Because of potential zeros in the data, 0.5 was added to all points only for plotting purposes."
+#| label: fig-wf-prelim
+#| warning: false
+#| message: false
+
+# First aggregate the data by date over all species
+count.date <- plyr::ddply(waterfowl.df, c("Study.area.name","Year","Date","Sample.station.label"), 
+                          plyr::summarize,
+                          total.count=sum(Count, na.rm=TRUE))
+
+# Make a preliminary plot of total count by date
+
+prelim.plot <- ggplot(data=count.date, aes(x=Date, y=log(total.count+.5), color=Sample.station.label, linetype=Sample.station.label))+
+   ggtitle("Waterfowl (total) count data")+
+   geom_point(position=position_dodge(width=.5))+
+   geom_line( position=position_dodge(width=.5))+
+   facet_wrap(~Study.area.name, ncol=1)
+prelim.plot 
+ggsave(plot=prelim.plot, 
+       file=paste(file.prefix,'-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+```
+
+Notice that there is a definite station effect, where, 
+for example, the number of birds at certain stations are generally higher than at the other stations 
+because of local station-specific conditions (e.g. better habitat).
+
+Next the maximum count in each month in each station (but only November, December, January, and February) 
+is found and plotted in @fig-wf-prelim2. 
+As noted earlier, a better measure may be the median count rather than the mean count. 
+The analysis would proceed in a similar fashion.
+
+```{r}
+#| echo: false
+#| fig-cap: "Plot of the maximum count in each station in November through February. Data is plotted on the logarithmic scale because of the wide range of values. Because of potential zeros in the data, 0.5 was added to all points only for plotting purposes."
+#| label: fig-wf-prelim2
+#| warning: false
+#| message: false
+
+# Find the maximum count each month (Nov/Dec/Jan/Feb only)
+count.date$Month  <- lubridate::month(count.date$Date)
+count.max <- plyr::ddply(count.date, c("Study.area.name","Sample.station.label","Year","Month"), 
+                         plyr::summarize, 
+                         max.count=max(total.count, na.rm=TRUE))
+count.max$Year.Month <- count.max$Year+((count.max$Month-.5)/12)     # this is the approximate midpoint of each month
+count.max <- count.max[ count.max$Month %in% c(1:2,11:12),]  # only retain N/D/J/F data
+
+# Make a preliminary plot of the maximum 
+prelim.max.plot <- ggplot(data=count.max, aes(x=Year.Month, y=log(max.count+.5), color=Sample.station.label, linetype=Sample.station.label))+
+  ggtitle("Waterfowl (max) count in month")+
+  geom_point()+
+  geom_line()+
+  scale_x_continuous(breaks=min(count.max$Year):(1+max(count.max$Year)))+
+  facet_wrap(~Study.area.name, ncol=1)
+prelim.max.plot 
+ggsave(plot=prelim.max.plot, 
+       file=paste(file.prefix,'-plot-prelim-max.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+
+
+
+```
+
+Again there is evidence of a station effect. A month effect is less clear.
+
+
+Because this is count data, so a linear mixed model is fit to the logarithm of the maximum call 
+in each month at each transect in each year. The model is:
+ $$log(MaxCount) = Year + MonthF+StationF(R) +YearF(R)$$
+where 
+
+- $log(MaxCount)$ is logarithm of the maximum count at that station in that month in that year; 
+- $StationF$ represents the station effect; 
+- $YearF$ represents the year-specific effects (process error), and 
+- $Year$ represents the calendar year trend over time. 
+
+The $StationF$ term allows for the fact that station-specific conditions may tend to 
+affect the counts on this station consistently over time. 
+The $YearF$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may elicit more visits from waterfowl).
+
+This model implicitly assumes that the trend in Nov, Dec, Jan and February 
+are the same but with a different intercept (i.e. parallel lines on the logarithmic scale).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. 
+For example, a trend may assume that there is constant 5% change over time 
+rather than a fixed 1 unit change per year. 
+Some caution is needed if any of the values are 0 as log(0) is not defined. 
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset) 
+is added to all values before the analysis proceeds.
+
+This model is fit using the *lmer()* function in the lmerTest package 
+(Kuznetsova, et al. 2016) 
+
+
+```{r}
+#| echo: false
+#| 
+#----------------------------------------------------------------------------------------
+#  Analysis of the maximum count by month
+
+# This is a regression analysis with Year as the trend variable and Month as a seasonal effect.
+# We need to account for the same stations being measured over time and for year specific effects (process error).
+# Because of the small counts, we will try a Poisson model (allowsing for possible overdispersion
+# It would be nice to fit a generalized linear mixed model, but there are convergence problems
+
+
+count.max$MonthF                <- factor(count.max$Month)
+count.max$Sample.station.labelF <- factor(count.max$Sample.station.label)
+count.max$YearF                 <- factor(count.max$Year)
+
+count.max.lmer <- lmerTest::lmer(log(max.count+.5) ~ Year + MonthF +(1|Sample.station.labelF) +(1|YearF), data=count.max)
+
+anova(count.max.lmer, ddf="Kenward-Roger")
+summary(count.max.lmer)
+VarCorr(count.max.lmer)
+
+count.max.pvalue <- anova(count.max.lmer, ddf="Kenward-Roger")[1,"Pr(>F)"]
+count.max.slope  <- fixef(count.max.lmer)[2]
+count.max.slope.se <- sqrt(diag(vcov(count.max.lmer)))[2]
+```
+
+
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in maximum birds counts. Because the model was fit on the logarithmic scale, the fitted trend line is not a straight line but curved."
+#| label: fig-max-trend
+#| warning: false
+#| message: false
+
+# extract a table of the slopes
+count.slopes <- data.frame(
+       Study.area.name =count.max$Study.area.name[1],
+       slope           = fixef(count.max.lmer)["Year"],
+       slope.se        = summary(count.max.lmer)$coefficients["Year","Pr(>|t|)"],
+       p.value         = summary(count.max.lmer)$coefficients[row.names(summary(count.max.lmer)$coefficients)=="Year"  ,"Pr(>|t|)"], 
+       #r2             = summary(count.max.lmer)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+count.slopes
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count), so we need to back transform
+count.fitted <- expand.grid(
+                 Study.area.name=count.max$Study.area.name[1],
+                 Year=seq(min(count.max$Year, na.rm=TRUE),1+max(count.max$Year, na.rm=TRUE), .1),
+                 MonthF=factor(c(1:2,11:12)),
+                 stringsAsFactors=FALSE)
+count.fitted$pred.mean <- exp(predict(count.max.lmer, newdata=count.fitted,type="response", re.form=~0))
+head(count.fitted)
+
+
+
+# Plot with trend line with a separate plot for each StudyArea
+count.plot.summary <- ggplot2::ggplot(data=count.max,
+                                    aes(x=Year.Month, y=max.count))+
+   ggtitle("Waterfowl counts ")+
+   ylab("Maximum Waterfowl Count in month")+
+   geom_point(size=3, aes(color=MonthF))+
+   geom_line(data=count.fitted, aes(x=Year,y=pred.mean, color=MonthF))+
+   facet_wrap(~Study.area.name, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=min(count.max$Year,na.rm=TRUE):max(count.max$Year,na.rm=TRUE))+
+   geom_text(data=count.slopes, aes(x=min(count.max$Year, na.rm=TRUE), y=max(count.max$max.count, na.rm=TRUE)), 
+             label=paste("Slope (on log scale) : ",round(count.slopes$slope,2), 
+                         " ( SE "  ,round(count.slopes$slope.se,2),")",
+                         " p :"    ,round(count.slopes$p.value,3)),
+                         hjust="left")
+count.plot.summary
+ggsave(plot=count.plot.summary, 
+       file=paste(file.prefix,'-count-plot-summary.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+
+exp.count.max.slope = exp(count.max.slope)
+```
+
+@fig-max-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend. With 
+`r length(unique(waterfowl.df$Year))` years of data, 
+the estimated slope is 
+`r round(count.max.slope,3)` 
+(SE `r round(count.max.slope.se,3)`) /year 
+(`r insight::format_p(count.max.pvalue)`).
+
+The reported common slope is on the logarithmic scale.
+This corresponds to an approximate exp(`r round(count.max.slope,3)`)=`r round(exp.count.max.slope,2)`x 
+multiplicative change/year, i.e. the mean maximum count in year $t+1$ is about 
+`r round(exp.count.max.slope,2)`x the mean maximum count in year $t$.
+Because the analysis is done on the logarithmic scale, the fitted trend line will 
+look non-linear on the original (non-transformed) scale.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in maximum count"
+#| label: fig-count-max-resid
+#| warning: false
+#| message: false
+
+
+# Look at the residual plots and save them to the directory
+count.max.diag.plot <- sf.autoplot.lmer(count.max.lmer)  # residual and other diagnostic plots
+plot(count.max.diag.plot)
+ggsave(#plot=count.max.diag.plot, #bug in ggsave with ggmultiplots that you don't specify object
+       file=paste(file.prefix,"-count-max-residual-plot.png",sep=""),
+       h=6, w=6, units="in", dpi=300)
+```
+
+
+Residual plots are presented in (@fig-count-max-resid).
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+The bottom left plot shows that the year specific effects are very small (the dots are all close to 0).
+The bottom right plot shows that the station effects with some stations tending to have higher counts than other stations. 
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+#Acheck for autocorreclation 
+count.max$resid <- log(count.max$max.count+.5) - predict(count.max.lmer, newdata=count.max, re.form=~0)
+mean.resid <- plyr::ddply(count.max, "Year", summarize, mean.resid=mean(resid))
+resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+count.max.dwres1 <- car::durbinWatsonTest(resid.fit)
+#dwres1
+count.max.dwres2 <- lmtest::dwtest(resid.fit)
+#dwres2
+
+```
+
+Whenever an analysis of a trend over time is conducted, the analysis 
+should test and adjust for autocorrelation. 
+Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
+The test for autocorrelation commonly used is the Durbin-Watson test and we find
+(`r insight::format_p(count.max.dwres1$p)` for the test of no autocorrelation.
+
+
+The analysis of the median count per month would follow the same steps as shown above 
+and the R code is easy to modify. 
+Similarly, this analysis was conducted at the total count level (over all species) b
+ut could be done for individual species. 
+One potential problem is that in some cases, species information is only recorded at the 
+Genus or higher level. 
+In these case, this data will have to discarded when the analysis is done at the species level, 
+but then you are making an implicit assumption that recording at the Genus level 
+happens at random and is unrelated to the response. 
+If this assumption is violated (e.g. perhaps when there are larger number of birds, 
+it is too difficult to record at the individual species level) then this is not occurring at 
+random and some effort must be made to “split” the genus level information among the species.
+
+Trends over time could also occur in the diversity of the birds. 
+In theory, standard diversity measures could be used and tracked over time, but 
+these have a very strong assumption that all species are equally detectable by the observer. 
+This is unlikely to be true. Secondly, the actual counts are quite small, 
+and diversity measures that rely on actual counts (e.g. Simpson’s diversity) 
+will not perform well. For this reason, I do not recommend an analysis on the diversity of the observations.
+
+# Summary
+
+Some caution is required to ensure that all stations are visited equally often in a year. 
+In this balanced design, it is straightforward to compute statistics over all measurements 
+of a station in a month and all stations in a year have the same number of visits. 
+It is possible to modify the analysis if only some stations are visited on a particular 
+date with an unequal number of visits to a station in a year. 
+A simple way to deal with unbalance would be to delete some of the observations, but better methods are available.
+
+The protocol assumes that the observation points allow the observer to see all 
+the waterfowl on the wetland between them so differential coverage over time may not be a problem.
+
+
+# References
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017). 
+lmerTest Package: Tests in Linear Mixed Effects Models.
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13
+ 
+R Core Team (2022). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. 
+https://www.R-project.org/.
+
+
