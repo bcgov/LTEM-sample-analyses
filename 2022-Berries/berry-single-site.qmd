@@ -23,12 +23,16 @@
 #
 #   A sample of 25-50 ripe berries is selected and measured for average mass.
 #
-title: "`r paste0('Soap Berry - LTEM - ',params$Study.area.name)`" 
-date: '`r format(Sys.time(), "%Y-%m-%d")`'
+title: "`r paste0('Soap Berry - LTEM - ',params$STUDY_AREA_NAME)`"
+date: today
+date-format: YYYY-MM-DD
+execute: 
+  error: true
 format: 
   html:
     toc: true
     number-sections: true
+    self-contained: true
   pdf:
     toc: true
     number-sections: true
@@ -37,7 +41,7 @@ format:
     number-sections: true
 
 params:
-  Study.area.name: "Eskers"
+  STUDY_AREA_NAME: "Eskers"
 
 ---
 
@@ -45,6 +49,10 @@ params:
 #| echo: false
 #| warning: false
 #| message: false
+#| include: false
+
+# set a default action of error:true to let all the chunks run
+
 
 # load libraries
 library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
@@ -58,6 +66,7 @@ library(plyr)      # for group processing
 library(readxl)    # for opening the Excel spreadsheets and reading off them
 library(reshape2)  # for melting and casting
 library(lmerTest)  # for the linear mixed modelling
+library(sf)        # for extracting the LTEM data
 library(stringr)   # string handling (like case conversion)
 
 # Load some common functions
@@ -112,53 +121,47 @@ Do NOT reuse bush numbers on different bushed; do not reuse stem numbers on the 
 
 ## Database structure
 
-The database for this protocol is a series of Excel workbooks 
-with multiple sheets in each workbook available at: **GIVE URL HERE**
-
-The *General Survey* sheet contains the information collected. There is one line per stem.
-
-The relevant fields on the worksheet are:
+The relevant fields from the database are:
 
 -	Study Area Name. The name of the study area.
 -	Sample Station Label. The bush/stem label.
 -	Date. The date the data was collected. The Year is extracted from this date.
 -	Berry Count. The number of soap berries on this stem. 
-If the stem is browed (or damaged) a missing value should be entered here and not the value of 0.
+If the stem is browsed (or damaged) a missing value should be entered here and not the value of 0.
 -	Stem Diameter. The diameter (mm) of the stem.
 -	Average Weight. The average weight of a sample of berries is collected. 
-Notice that there is only ONE mean weight found so this value 
+Notice that there is only ONE mean weight found per year and so this value  
 is replicated on every stem line of the sheet. The sample size used to determine the weight is in a separate column.
 
 # Reading and checking the data
 
 ```{r}
 #| echo: false
+#| warning: false
+#| message: false
+#| include: false
+#| 
 # Get the data base information and any corrections here
 berry.extract <- read.LTEM.data(study.type="Berries",
-                                 site.names=params$Study.area.name, sheets="General Survey")
+                                 site.names=params$STUDY_AREA_NAME)
 
 
 ```
 
-The database was read for all record pertaining to the
-`r params$Study.area.name`. The following files were found:
+The database was examined for all record pertaining to the
+`r params$STUDY_AREA_NAME`. The following surveys were found:
 
 ```{r}
 #| echo: false
-cat("File names with the data \n")
-berry.extract$files
+cat("Surveys with the data \n")
+berry.extract$projects[,c("SPI_PROJECT_ID","SURVEY_ID","START_DATE","STUDY_AREA_NAME")]
 ```
 
-These workbooks were read using *R*:
 
 ```{r}
 #| echo: false
 
-# read each workbook and put all of the data together into one big data frame
-# There is some sort of problem with the 2015 excel file so I'm using csv her.
-soap.df <- berry.extract$extracted.sheets$`General Survey`
-
-
+soop.df <- berry.extract$user.data
 ```
 
 The following data editing was performed
@@ -177,36 +180,23 @@ These are normally replaced by periods (".") in the variable name.
 # Variable names in R must start with a letter and contain letters or number or _. 
 # Blanks in variable names are not normally allowed. Blanks will be replaced by . (period)
 cat("\nOriginal variable names in data frame\n")
-names(soap.df)
+names(soop.df)
 
-names(soap.df) <- make.names(names(soap.df))
+names(soop.df) <- make.names(names(soop.df))
 
 cat("\nCorrected variable names of data frame\n")
-names(soap.df)
+names(soop.df)
 ```
 
-## Dates converted to standardized form
+## Check the number of records by year.
+
+Check that the number of observations by year seems reasonable:
 
 ```{r}
 #| echo: false
 #| 
-# Convert dates to R date format
-# xtabs(~Date, data=soap.df, exclude=NULL, na.action=na.pass)  # check the date formats.
-soap.df$Date.new<- as.Date(soap.df$Date)
-
-select <- is.na(soap.df$Date.new)
-if(any(select)){
-   cat("*** ERROR *** Some dates appear to be invalid \n")
-   soap.df[select, c("Study.area.name","Sample.station.label","Date","Date.new")]
-   stop()
-}
-
-soap.df$Date <- soap.df$Date.new
-
-soap.df$Year <- lubridate::year(soap.df$Date)
-
 cat("\n\nThe number of records by year are \n")
-xtabs(~Study.area.name+Year, data=soap.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+xtabs(~STUDY_AREA_NAME+Year, data=soop.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
 ```
 
 ## Checking Study Area Name
@@ -222,25 +212,27 @@ The list of Study Area Names by year in the data is:
 
 # Check that the Study Area Name is the same across all years
 # Look at the output from the xtabs() to see if there are multiple spellings 
-# of the same Study.area.name.
+# of the same STUDY_AREA_NAME.
 
-# We will convert the Study.area.name to Proper Case.
-soap.df$Study.area.name <- stringr::str_to_title(soap.df$Study.area.name)
-xtabs(~Study.area.name+Year, data=soap.df, exclude=NULL, na.action=na.pass)
+# We will convert the STUDY_AREA_NAME to Proper Case.
+soop.df$STUDY_AREA_NAME <- stringr::str_to_title(soop.df$STUDY_AREA_NAME)
+xtabs(~STUDY_AREA_NAME+Year, data=soop.df, exclude=NULL, na.action=na.pass)
 
-if(!all(grepl(params$Study.area.name, soap.df$Study.area.name, ignore.case=TRUE))){
-  cat("*** ERROR *** Study.area.names are not consistent\n")
-  cat("A tabulation of Study.area.names in datasets is \n")
-  xtabs(~Study.area.name, data=soap.df, exclude=NULL, na.action=na.pass)
-  cat("Requested study area was ", params$Study.area.name,  "\n")
-  stop("Input data is not all from ", params$Study.area.name)
+if(!all(grepl(params$STUDY_AREA_NAME, soop.df$STUDY_AREA_NAME, ignore.case=TRUE))){
+  cat("*** ERROR *** STUDY_AREA_NAMEs are not consistent\n")
+  cat("A tabulation of STUDY_AREA_NAMEs in datasets is \n")
+  xtabs(~STUDY_AREA_NAME, data=soop.df, exclude=NULL, na.action=na.pass)
+  cat("Requested study area was ", params$STUDY_AREA_NAME,  "\n")
+  #knitr::knit_exit()
 }
 
-if(length(unique(soap.df$Study.area.name))>1){
+if(length(unique(soop.df$STUDY_AREA_NAME))>1){
    cat("*** ERROR *** More than one study area found \n")
    cat("\n\nThe number of records by year are \n")
-   xtabs(~Study.area.name+Year, data=soap.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
-   stop()
+   xtabs(~STUDY_AREA_NAME+Year, data=soop.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   #knitr::knit_exit()
+   soop.df$STUDY_AREA_NAME <- "**MANUALLY SET**"
+   xtabs(~STUDY_AREA_NAME+Year, data=soop.df, exclude=NULL, na.action=na.pass)  
 }
 
 ```
@@ -248,80 +240,106 @@ if(length(unique(soap.df$Study.area.name))>1){
 
 ## Checking species code
 
-The species code should be the same across the file.
+The species code should be the same across the years of the project.
 
 ```{r}
 #| echo: false
 # Check the Species code to make sure that all the same
 # This isn't used anywhere in the analysis but is useful to know
-xtabs(~Species+Year, data=soap.df, exclude=NULL, na.action=na.pass)
+xtabs(~SPECIES_CODE+Year, data=soop.df, exclude=NULL, na.action=na.pass)
 
-if(length(unique(soap.df$Species))>1){
+if(length(unique(soop.df$SPECIES_CODE))>1){
    cat("*** WARNING *** More than one species name found \n")
    cat("\n\nThe number of records by species and year are \n")
-   xtabs(~Species+Year, data=soap.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   xtabs(~SPECIES_CODE+Year, data=soop.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
    #stop()
 }
 
 ```
 
-## Extract the bush and stem numbers 
+## Check the plant/bush and stem/branch numbers 
 
-The bush and stem numbers need to be extracted.
-Currently, the bush # is the portion of the Sample.station.label up to the dash,
-and the stem number follows the bush.
-
-Bush should be followed for several years in a row, and the label 
+The bush and stem numbers are also recorded.
+Each bush/plant should be followed for several years in a row, and the label 
 for the bush should not be replicated if the bush is replaced by a new bush.
-This needs to be check in the tables below:
+
+This needs to be check in the tables below. For example, ensure that a "bush" or "stem" is not measured
+for a few years, is not then measured, and then starts again -- this may be an indication that the plant
+was replaced, but not relabeled (or a particular plant was not measured in a particular year)
 
 ```{r}
 #| echo: false
 #
-# Look at Sample Station Label and extract the bush and stem numbers
-#   The Bush number is the string up to the - (dash)
-#   The Stem number is full string. We need to use the combination of bush and 
-#       stem number of identify stems because plan01stem01 is a different stem than
-#       plan02stem01.
-# 
-xtabs(~Sample.station.label+Year, data=soap.df, exclude=NULL, na.action=na.pass)
-
-soap.df$Bush <- substr(soap.df$Sample.station.label, 1, -1+regexpr('-',soap.df$Sample.station.label, fixed=TRUE))
-soap.df$Stem <- soap.df$Sample.station.label
-
 # check the extraction
-xtabs(~Sample.station.label+Bush, data=soap.df, exclude=NULL, na.action=na.pass)
+xtabs(~BUSH+Year, data=soop.df, exclude=NULL, na.action=na.pass)
+xtabs(~STEM+Year, data=soop.df, exclude=NULL, na.action=na.pass)
+
+# check to see if any BUSH number is stopped and then started
+# Checking bush numbers
+year.set <- sort(unique(soop.df$Year))
+plyr::d_ply(soop.df, "BUSH", function(bush){
+   # create capture history
+   cap.hist <- rep(0,length(year.set))
+   cap.hist[ match(bush$Year, year.set)] <- 1
+   # look for internal 0's (e.g. 1 0 1) that indicates a stop measuring and then start over.
+   # find the last 1 from the left and the first 1 from the right. If these don't match, a potential problem
+   from.left   <- which.max(cap.hist)
+   from.right  <- length(year.set)+1-which.max(rev(cap.hist))
+   #browser()
+   if(0==prod(cap.hist[from.left:from.right])){
+      cat("Check bush/plant data below \n")
+      bush
+   }
+})
+
+# check to see if any STEM number is stopped and then started
+# Checking bush numbers
+year.set <- sort(unique(soop.df$Year))
+plyr::d_ply(soop.df, "STEM", function(stem){
+   # create capture history
+   cap.hist <- rep(0,length(year.set))
+   cap.hist[ match(stem$Year, year.set)] <- 1
+   # look for internal 0's (e.g. 1 0 1) that indicates a stop measuring and then start over.
+   # find the first 1 from the left and the first 1 from the right and see if any internal zero?
+   from.left   <- which.max(cap.hist)
+   from.right  <- length(year.set)+1-which.max(rev(cap.hist))
+   #browser()
+   if(0==prod(cap.hist[from.left:from.right])){
+      cat("Check stem/branch data below \n")
+      stem
+   }
+})
 
 ```
 
-## Extract sample size and the mean berry weight
+<!-- ## Extract sample size and the mean berry weight -->
 
-```{r}
-#| echo: false
+<!-- ```{r} -->
+<!-- #| echo: false -->
 
-# The sample size for the berry weight is given in the N.for.average.berry.count field
-# Note that even though this field is replicated for all observations, there is ONLY one
-# measurement of weight taken for the entire year.
-xtabs(~Year+N.for.average.berry.count, data=soap.df, exclude=NULL, na.action=na.pass)
+<!-- # The sample size for the berry weight is given in the N.for.average.berry.count field -->
+<!-- # Note that even though this field is replicated for all observations, there is ONLY one -->
+<!-- # measurement of weight taken for the entire year. -->
+<!-- xtabs(~Year+N.for.average.berry.count, data=soop.df, exclude=NULL, na.action=na.pass) -->
 
-# check the berry count. These need to be numeric
-#xtabs(~Year+Berry.count, data=soap.df, exclude=NULL, na.action=na.pass)
+<!-- # check the berry count. These need to be numeric -->
+<!-- #xtabs(~Year+Berry.Count, data=soop.df, exclude=NULL, na.action=na.pass) -->
 
-soap.df$Berry.count.new<- as.numeric(soap.df$Berry.count)
-if(any(!is.na(soap.df$Berry.count.new))){
-   cat("Some berry counts appear to be missing or non-numeric\n")
-   select <- is.na(soap.df$Berry.count.new)
-   soap.df[select, c("Study.area.name","Sample.station.label","Date","Berry.count","Berry.count.new")]
-   #stop()
-}
-#xtabs(~Year+Berry.count, data=soap.df, exclude=NULL, na.action=na.pass)
+<!-- soop.df$Berry.Count.new<- as.numeric(soop.df$Berry.Count) -->
+<!-- if(any(!is.na(soop.df$Berry.Count.new))){ -->
+<!--    cat("Some berry counts appear to be missing or non-numeric\n") -->
+<!--    select <- is.na(soop.df$Berry.Count.new) -->
+<!--    soop.df[select, c("STUDY_AREA_NAME","Sample.station.label","Date","Berry.Count","Berry.Count.new")] -->
+<!--    #stop() -->
+<!-- } -->
+<!-- #xtabs(~Year+Berry.Count, data=soop.df, exclude=NULL, na.action=na.pass) -->
 
-```
+<!-- ``` -->
 
 ## Check the comments
 
 The comments recorded should be reviewed in case these indicate problems with the data,
-For example, if the comment is "heavily browsed" make sure that the Berry.count is recorded as NA and not as 0.
+For example, if the comment is "heavily browsed" make sure that the Berry.Count is recorded as NA and not as 0.
 
 ```{r}
 #| echo: false
@@ -329,16 +347,16 @@ For example, if the comment is "heavily browsed" make sure that the Berry.count 
 # check other comments. You may need to adjust the data to account for 
 # problems in the data. 
 # For example, if the comment is "heavily browsed" make sure that 
-#   the Berry.count is NA and not 0
-xtabs(~Comments+Berry.count, data=soap.df, exclude=NULL, na.action=na.pass)
-xtabs(~Comments+Year,        data=soap.df, exclude=NULL, na.action=na.pass)
+#   the Berry.Count is NA and not 0
+#xtabs(~COMMENT+Berry.Count, data=soop.df, exclude=NULL, na.action=na.pass)
+xtabs(~COMMENT     ,        data=soop.df, exclude=NULL, na.action=na.pass)
 ```
 
 ```{r}
 #| echo: false
 
 # Get the file prefix
-file.prefix <- make.names(soap.df$Study.area.name[1])
+file.prefix <- make.names(soop.df$STUDY_AREA_NAME[1])
 file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert . to 
 if(!dir.exists("PLots"))dir.create("Plots")
 file.prefix <- file.path("Plots", file.prefix)
@@ -347,8 +365,8 @@ file.prefix <- file.path("Plots", file.prefix)
 
 # Single Site Analysis
 
-Date for the `r params$Study.area.name` are available from `r min(soap.df$Year, na.rm=TRUE)` to 
-`r max(soap.df$Year, na.rm=TRUE)`. 
+Date for the `r params$STUDY_AREA_NAME` are available from `r min(soop.df$Year, na.rm=TRUE)` to 
+`r max(soop.df$Year, na.rm=TRUE)`. 
 
 This design has multiple transects that are repeated measured over time 
 with multiple plots measured on each transect that are also repeated 
@@ -356,7 +374,7 @@ measured over time.
 Please refer to the Fitting Trends with Complex Study Designs document in the 
 CommonFile directory for information on fitting trends with complex study designs. 
 
-All analyses were done using the R (R Core Team, 2022)  analysis system. 
+All analyses were done using the R (R Core Team, 2023)  analysis system. 
 All plots are also saved as separate *png files for inclusion into other reports.
 
 
@@ -369,11 +387,11 @@ These are NOT real replicated readings but only an artifact of the database
 so some care is needed to extract only a single value per individual stem on a site/year.
 
 A simple linear regression is used to look for changes over time using the model (in standard notation)
-$$MBW \sim Year$$
+$$\mathit{MBW} \sim \mathit{Year}$$
 where 
 
-- $MBW$ is the mean berry weight and
-- $Year$ is the calendar year over time. 
+- $\mathit{MBW}$ is the mean berry weight and
+- $\mathit{Year}$ is the calendar year over time. 
 
 This model can be fit using the *lm()* function in R. 
 
@@ -388,23 +406,41 @@ This model can be fit using the *lm()* function in R.
 # We take the mean for each year. We also take the SD. If this is >0 then the
 # data in the database is not consistent
 
-berry.weight <- plyr::ddply(soap.df, c("Study.area.name","Year"), plyr::summarize, 
-                            Mean.weight   =mean(Mean.berry.weight..gm., na.rm=TRUE),
-                            Mean.weight.sd=sd(  Mean.berry.weight..gm., na.rm=TRUE),
-                            N.Mean.weight =mean(N.for.average.berry.count, na.rm=TRUE))
+soop.df$Mean.Berry.Weight..gm. <- as.numeric(soop.df$Mean.Berry.Weight..gm.)
+
+berry.weight <- plyr::ddply(soop.df, c("STUDY_AREA_NAME","Year"), plyr::summarize, 
+                            Mean.weight   =mean(Mean.Berry.Weight..gm., na.rm=TRUE),
+                            Mean.weight.sd=sd(  Mean.Berry.Weight..gm., na.rm=TRUE)
+                            #,N.Mean.weight =mean(N.for.average.berry.count, na.rm=TRUE)
+                            )
+
+cat("Listing of SD of Mean.Berry weights by study area and year\n")
+berry.weight
 
 # check to see if any of the Mean.weight.sd >0 indicating that the data is not consistent on the sheets
-if(any(berry.weight$Mean.weight.sd >0)){
+if(any(berry.weight$Mean.weight.sd >0, na.rm=TRUE)){
   cat("*** ERROR *** Multiple measures on mean berry weight were given for a year\n")
   berry.weight[ berry.weight$Mean.weight.sd >0,]
-  stop()
+  #knitr::knit_exit()
 }
 
 # listing of data
 #berry.weight
 
+if(sum(!is.na(berry.weight$Mean.weight))<3){
+   cat("*** Error - inadequate numbers of mean weight of berries \n")
+   berry.weight
+   #knitr::knit_exit()
+}
+
+
 # Fit a linear trend through the data and check for evidence of a trend.
 weight.fit <- lm(Mean.weight ~ Year, data=berry.weight)
+
+cat("\n\n")
+anova(weight.fit)
+cat("\n\n")
+summary(weight.fit)
 
 weight.fit.pvalue <- anova(weight.fit)[1,"Pr(>F)"]
 weight.fit.slope  <- coef(weight.fit)[2]
@@ -429,10 +465,10 @@ the estimated slope is
 
 # extract a table of slopes 
 weight.slopes <- data.frame(
-  Study.area.name=berry.weight$Study.area.name[1],
-  slope    = coef(weight.fit)["Year"],
-  slope.se = sqrt(diag(vcov(weight.fit)))["Year"],
-  p.value  = summary(weight.fit)$coefficients[row.names(summary(weight.fit)$coefficients)=="Year"  ,"Pr(>|t|)"], 
+  STUDY_AREA_NAME=berry.weight$STUDY_AREA_NAME[1],
+  slope    = weight.fit.slope,
+  slope.se = weight.fit.slope.se,
+  p.value  = weight.fit.pvalue, 
   r2       = summary(weight.fit)$r.squared,
   stringsAsFactors=FALSE)
 #weight.slopes
@@ -444,8 +480,8 @@ weight.plot.summary <- ggplot2::ggplot(data=berry.weight,
    ylab("Mean weight (g)")+
    geom_point(size=3)+
    geom_smooth(method="lm", se=FALSE)+
-   facet_wrap(~Study.area.name, ncol=2, scales="free" )+
-   scale_x_continuous(breaks=2010:2020)+
+   facet_wrap(~STUDY_AREA_NAME, ncol=2, scales="free" )+
+   scale_x_continuous(breaks=integer_breaks())+
    geom_text(data=weight.slopes, aes(x=min(berry.weight$Year, na.rm=TRUE), y=max(berry.weight$Mean.weight, na.rm=TRUE)), 
              label=paste("Slope : ",round(weight.slopes$slope,3), 
                          " ( SE "  ,round(weight.slopes$slope.se,3),")",
@@ -466,7 +502,7 @@ ggsave(plot=weight.plot.summary,
 #| label: fig-weight-resid
 #| warning: false
 #| message: false
-
+#| error: true
 
 # Look at the residual plots and save them to the directory
 weight.diag.plot <- autoplot(weight.fit)  # residual and other diagnostic plots
@@ -497,6 +533,7 @@ years of data available, this not sensible.
 #| echo: false
 #| warning: false
 #| message: false
+#| error: true
 
 # check for autocorrelation
 weight.dwres1 <- car::durbinWatsonTest(weight.fit)
@@ -537,19 +574,19 @@ removed or added as long as each stem has a unique label within a site.
 
 A linear mixed model will be used to look for changes over time 
 to account for the repeated measurements over time of each branch on the same plant:
-$$StemD \sim Year + YearF(R) + Bush(R)+ Stem(R)$$
+$$StemD \sim \mathit{Year} + \mathit{YearF}(R) + \mathit{BushF}(R)+ \mathit{StemF}(R)$$
  
 where 
 
 - $StemD$ is the measured stem diameter, 
-- $Year$ is the trend; 
-- $YearF(R)$, $BushF(R)$, and $StemF(R)$ are the random effects of year-specific factors, 
+- $\mathit{Year}$ is the term representing the trend over time; 
+- $\mathit{YearF(R)}$, $\mathit{BushF}(R)$, and $\mathit{StemF}(R)$ are the random effects of year-specific factors, 
 bushes and stems respectively. 
 These random effects are needed to account for the repeated measurement of the 
-same stem (the $StemF(R)$) term; 
-multiple stems measured from the same plant ($BushF(R)$) term; 
-and year-specific factors (also known as process error, $YearF(R)$). 
-The process error term is distinguished from the simple trend term $Year$. 
+same stem (the $\mathit{StemF}(R)$) term; 
+multiple stems measured from the same plant ($\mathit{BushF}(R)$) term; 
+and year-specific factors (also known as process error, $\mathit{YearF(R)}$). 
+The process error term is distinguished from the simple trend term $\mathit{Year}$. 
 
 For example, all of the stems on the same bush may have 
 related diameters because they are all similar aged. 
@@ -569,22 +606,31 @@ This model is fit using the *lmer()* function in the lmerTest package
 #  We need to account for year process error. Essentially, you need to get one number
 #  per year for the analysis (the mean), but we need to account for the repeated measurements
 
-soap.df$BushF <- factor(soap.df$Bush)
-soap.df$StemF <- factor(soap.df$Stem)
-soap.df$YearF <- factor(soap.df$Year)  # This represents process error 
+soop.df$BUSHF <- factor(soop.df$BUSH)
+soop.df$STEMF <- factor(soop.df$STEM)
+soop.df$YearF <- factor(soop.df$Year)  # This represents process error 
 
-stem.diam <- soap.df[!is.na(soap.df$Branch.diameter..mm.),]
-  
+soop.df$Branch.Diameter..mm. <- as.numeric(soop.df$Branch.Diameter..mm.)
+
+stem.diam <- soop.df[!is.na(soop.df$Branch.Diameter..mm.),]
+
+# incase the fit fails  
+stemd.fit.pvalue   <- NA
+stemd.fit.slope    <- NA
+stemd.fit.slope.se <- NA
+
 # do the fit
-stemd.fit <- lmerTest::lmer(Branch.diameter..mm. ~ Year + (1|YearF) + (1|BushF) + (1|StemF), data=stem.diam)
+stemd.fit <- lmerTest::lmer(Branch.Diameter..mm. ~ Year + (1|YearF) + (1|BUSHF) + (1|STEMF), data=stem.diam)
 
 stemd.fit.pvalue <- anova(stemd.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
 stemd.fit.slope  <- fixef(stemd.fit)[2]
 stemd.fit.slope.se <- sqrt(diag(vcov(stemd.fit)))[2]
 
-#anova(stem.fit, dfm="Kenward-Roger")
-#summary(stem.fit)$coefficients
-#VarCorr(stem.fit)
+cat("\n\n")
+anova(stemd.fit, ddfm="Kenward-Roger")
+cat("\n\n")
+summary(stemd.fit)$coefficients
+
 ```
 
 @fig-stemd-trend shows a summary plot, along with estimates of the slope, its standard error,
@@ -610,7 +656,7 @@ and stem-to-stem variation, they provide little information on trend.
 #| 
 # extract a table of statistics for each study area
 stemd.slopes <- data.frame(
-  Study.area.name = stem.diam$Study.area.name[1],
+  STUDY_AREA_NAME = stem.diam$STUDY_AREA_NAME[1],
   slope           = fixef(  stemd.fit)["Year"],
   slope.se        = sqrt(diag(vcov(  stemd.fit)))[names(fixef(  stemd.fit))=="Year"],
   p.value         = summary(  stemd.fit)$coefficients[row.names(summary(  stemd.fit)$coefficients)=="Year"  ,"Pr(>|t|)"], 
@@ -619,7 +665,7 @@ stemd.slopes <- data.frame(
 
 # compute the fitted values from the model
 stemd.fitted <- data.frame(
-                 Study.area.name=stem.diam$Study.area.name[1],
+                 STUDY_AREA_NAME=stem.diam$STUDY_AREA_NAME[1],
                  Year=seq(min(stem.diam$Year, na.rm=TRUE),max(stem.diam$Year, na.rm=TRUE), .1),
                  stringsAsFactors=FALSE)
 stemd.fitted$pred.mean <- predict(stemd.fit, newdata=stemd.fitted, type="response", re.form=~0)
@@ -628,22 +674,22 @@ stemd.fitted$pred.mean <- predict(stemd.fit, newdata=stemd.fitted, type="respons
 
 # Plot with trend line with a separate plot for each StudyArea
 # We add in the observed mean for each year to look at autocorrrelation overtime
-stemd.yearly.mean <- plyr::ddply(stem.diam, c("Study.area.name","Year"), plyr::summarize,
-                                mean.stem=mean(Branch.diameter..mm., na.rm=TRUE))
+stemd.yearly.mean <- plyr::ddply(stem.diam, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.stem=mean(Branch.Diameter..mm., na.rm=TRUE))
 stemd.yearly.mean
 
 
 
-stemd.plot.summary <- ggplot2::ggplot(data=soap.df,
-                                    aes(x=Year, y=Branch.diameter..mm.))+
+stemd.plot.summary <- ggplot2::ggplot(data=soop.df,
+                                    aes(x=Year, y=Branch.Diameter..mm.))+
    ggtitle("Stem Diameter ")+
    ylab("Stem diameter (mm)")+
-   geom_point(size=1, aes(color=Bush), position=position_dodge(w=.1))+
+   geom_point(size=1, aes(color=BUSH), position=position_dodge(w=.1))+
    geom_point(data=stemd.yearly.mean, aes(y=mean.stem), shape="X", size=4)+
    geom_line(data=stemd.fitted, aes(y=pred.mean))+
-   facet_wrap(~Study.area.name, ncol=2, scales='free')+
-   scale_x_continuous(breaks=min(stem.diam$Year,na.rm=TRUE):max(stem.diam$Year,na.rm=TRUE))+
-   geom_text(data=stemd.slopes, aes(x=min(soap.df$Year, na.rm=TRUE), y=max(soap.df$Branch.diameter..mm., na.rm=TRUE)), 
+   facet_wrap(~STUDY_AREA_NAME, ncol=2, scales='free')+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_text(data=stemd.slopes, aes(x=min(soop.df$Year, na.rm=TRUE), y=max(soop.df$Branch.Diameter..mm., na.rm=TRUE)), 
              label=paste("Slope : ",round(stemd.slopes$slope,2), 
                          " ( SE "  ,round(stemd.slopes$slope.se,2),")",
                          insight::format_p(stemd.fit.pvalue)),
@@ -688,7 +734,7 @@ that stem diameter could be readily influenced by year-specific factors (unlike,
 #| label: fig-stemd-resid
 #| warning: false
 #| message: false
-
+#| error: true
 
 # Look at the residual plots and save them to the directory
 stemd.diag.plot <- sf.autoplot.lmer(  stemd.fit)  # residual and other diagnostic plots
@@ -702,7 +748,7 @@ ggsave(#plot=diag.plot,
 Residual plots are presented in (@fig-stemd-resid).
 The upper two plots are interpreted in the same way as noted previously. 
 There is some (very weak) evidence of a lack of fit for stems with larger diameters.
-but it is not serious. Caterpiller plots attempt to show the distribution of the random effects. 
+but it is not serious. Caterpillar plots attempt to show the distribution of the random effects. 
 If the model fits well, you would expect the blue dots (the estimated random effect) to lie mostly 
 in the $\pm 2$ standard deviation bands with no obvious outliers. 
 There are no obvious outliers in the stem or bush random effects and there are too few years to say much.
@@ -714,9 +760,12 @@ model to explain some of the year-specific effects.
 #| echo: false
 #| warning: false
 #| message: false
+#| error: true
+
+
 
 #test for autocorrelation by finding the average residual for each year
-stem.diam$resid <- stem.diam$Branch.diameter..mm. - predict(stemd.fit, newdata=stemd.fitted, type="response", re.form=~0)
+stem.diam$resid <- stem.diam$Branch.Diameter..mm. - predict(stemd.fit, newdata=stemd.fitted, type="response", re.form=~0)
 mean.resid <- plyr::ddply(stem.diam, "Year", summarize, mean.resid=mean(resid))
 resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
 stemd.dwres1 <- car::durbinWatsonTest(resid.fit)
@@ -731,7 +780,8 @@ have to test and adjust for autocorrelation in the year-specific effect.
 This usually isn’t a problem unless there are 10+ years of data. 
 Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
 The test for autocorrelation commonly used is the Durbin-Watson test and we find
-`r insight::format_p(stemd.dwres1$p, missing="p is Not avail")` for the test of no autocorrelation.
+`r try(insight::format_p(stemd.dwres1$p, missing="p is Not avail"), silent=TRUE)` 
+for the test of no autocorrelation.
 
 
 
@@ -759,23 +809,23 @@ The average count is about 5 or less, then a Poisson regression can, in theory, 
 However, if there are several random effects, then a Poisson mixed effects model 
 is extremely difficult to fit. 
 However, for larger counts, a linear mixed model on the log(counts+0.5) will work well 
-and avoidd many of the problems in dealing with generalized linear mixed models. 
+and avoids many of the problems in dealing with generalized linear mixed models. 
 
 A linear mixed model will be used to look for changes over time in the mean berry count 
 to account for the repeated measurements over time of each branch on the same plant:
-$$log(BerryCount+0.5) \sim Year + YearF(R) + Bush(R)+ Stem(R)$$
+$$log(BerryCount+0.5) \sim \mathit{Year} + \mathit{YearF(R)} + \mathit{BushF}(R)+ Stem(R)$$
  
 where 
 
 - $BerryCount$ is the measured berry count on a stem, 
-- $Year$ is the trend; 
-- $YearF(R)$, $BushF(R)$, and $StemF(R)$ are the random effects of year-specific factors, 
+- $\mathit{Year}$ is the trend; 
+- $\mathit{YearF}(R)$, $\mathit{BushF}(R)$, and $\mathit{StemF}(R)$ are the random effects of year-specific factors, 
 bushes and stems respectively. 
 These random effects are needed to account for the repeated measurement of the 
-same stem (the $StemF(R)$) term; 
-multiple stems measured from the same plant ($BushF(R)$) term; 
-and year-specific factors (also known as process error, $YearF(R)$). 
-The process error term is distinguished from the simple trend term $Year$. 
+same stem (the $\mathit{StemF}(R)$) term; 
+multiple stems measured from the same plant ($\mathit{BushF}(R)$) term; 
+and year-specific factors (also known as process error, $\mathit{YearF(R)}$). 
+The process error term is distinguished from the simple trend term $\mathit{Year}$. 
 
 This model is fit using the *lmer()* function in the lmerTest package 
 (Kuznetsova, et al. 2016) and a summary is shown in @fig-count-trend.
@@ -794,24 +844,32 @@ This model is fit using the *lmer()* function in the lmerTest package
 #  We need to account for year process error. Essentially, you need to get one number
 #  per year for the analysis (the mean), but we need to account for the repeated measurements
 
-range(soap.df$Berry.count, na.rm=TRUE)
+#range(soop.df$Berry.Count, na.rm=TRUE)
 
-soap.df$BushF <- factor(soap.df$Bush)
-soap.df$StemF <- factor(soap.df$Stem)
-soap.df$YearF<- factor(soap.df$Year)  # This represents process error 
+soop.df$BUSHF <- factor(soop.df$BUSH)
+soop.df$STEMF <- factor(soop.df$STEM)
+soop.df$YearF<- factor(soop.df$Year)  # This represents process error 
 
 # remove missing values
-count.df <- soap.df[ !is.na(soap.df$Berry.count),]
+soop.df$Berry.Count <- as.numeric(soop.df$Berry.Count)
+count.df <- soop.df[ !is.na(soop.df$Berry.Count),]
 
-count.fit <- lmerTest::lmer(log(Berry.count+.5) ~ Year + (1|Year)+  (1|Bush) + (1|Stem), data=count.df)
+# set this in case the fit does not work
+count.fit.pvalue   <- NA
+count.fit.slope    <- NA
+count.fit.slope.se <- NA
+
+count.fit <- lmerTest::lmer(log(Berry.Count+.5) ~ Year + (1|Year)+  (1|BUSHF) + (1|STEMF), data=count.df)
 
 count.fit.pvalue <- anova(count.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
 count.fit.slope  <- fixef(count.fit)[2]
 count.fit.slope.se <- sqrt(diag(vcov(count.fit)))[2]
 
-#anova(stem.fit, dfm="Kenward-Roger")
-#summary(stem.fit)$coefficients
-#VarCorr(stem.fit)
+cat("\n\n")
+anova(count.fit, dfm="Kenward-Roger")
+cat("\n\n")
+summary(count.fit)$coefficients
+
 ```
 
 With 
@@ -837,41 +895,41 @@ and stem-to-stem variation, they provide little information on trend.
 # extract a table of statistics for each study area
 # extract a table of the slopes
 count.slopes <- data.frame(
-       Study.area.name = count.df$Study.area.name[1],
+       STUDY_AREA_NAME = count.df$STUDY_AREA_NAME[1],
        slope           = fixef(count.fit)["Year"],
        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"],
        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"], 
        #r2             = summary(count.fit)$r.squared,  # not defined for mixed effect models
        stringsAsFactors=FALSE)
-count.slopes
+#count.slopes
 
 # Plot with trend line with a separate plot for each StudyArea
-count.yearly.mean <- plyr::ddply(count.df, c("Study.area.name","Year"), plyr::summarize,
-                                mean.count=mean(Berry.count, na.rm=TRUE))
-count.yearly.mean
+count.yearly.mean <- plyr::ddply(count.df, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.count=mean(Berry.Count, na.rm=TRUE))
+#count.yearly.mean
 
 # compute the fitted values from the model
 # The model was run on the log(average count), so we need to back transform
 count.fitted <- data.frame(
-                 Study.area.name=count.df$Study.area.name[1],
+                 STUDY_AREA_NAME=count.df$STUDY_AREA_NAME[1],
                  Year=seq(min(count.df$Year, na.rm=TRUE),max(count.df$Year, na.rm=TRUE), .1),
                  stringsAsFactors=FALSE)
 count.fitted$pred.mean <- exp(predict(count.fit, newdata=count.fitted,type="response", re.form=~0))
-head(count.fitted)
+#head(count.fitted)
 
 
 
 # make some summary plots
 count.plot.summary <- ggplot2::ggplot(data=count.df,
-                                    aes(x=Year, y=Berry.count))+
+                                    aes(x=Year, y=Berry.Count))+
    ggtitle("Berry Count ")+
    ylab("Berry Count")+
-   geom_point(size=1, aes(color=Bush), position=position_dodge(w=.1))+
+   geom_point(size=1, aes(color=BUSH), position=position_dodge(w=.1))+
    geom_point(data=count.yearly.mean, aes(y=mean.count), shape="X", size=4)+
    geom_line(data=count.fitted, aes(y=pred.mean))+
-   facet_wrap(~Study.area.name, ncol=2, scales='free')+
-   scale_x_continuous(breaks=min(count.df$Year):max(count.df$Year, na.rm=TRUE))+
-   geom_text(data=count.slopes, aes(x=min(soap.df$Year,na.rm=TRUE), y=max(soap.df$Berry.count,na.rm=TRUE)), 
+   facet_wrap(~STUDY_AREA_NAME, ncol=2, scales='free')+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_text(data=count.slopes, aes(x=min(soop.df$Year,na.rm=TRUE), y=max(soop.df$Berry.Count,na.rm=TRUE)), 
              label=paste("Slope (on log scale) : ",round(count.slopes$slope,2), 
                          " ( SE "  ,round(count.fit.slope.se,2),")",
                          insight::format_p(count.fit.pvalue)),
@@ -905,7 +963,8 @@ and residual (unknown) sources (@tbl-count-vc).
 
 
 The stem-to-stem variation (within a bush) is comparable to the 
-bush-to-bush variation and residual variation and all are much larger than year-specific effect (process error). 
+bush-to-bush variation and residual variation and all are much 
+larger than year-specific effect (process error). 
 This is not too surprising because it is hard to imagine 
 that stem diameter could be readily influenced by year-specific factors (unlike, for example, berry counts).
 
@@ -916,7 +975,7 @@ that stem diameter could be readily influenced by year-specific factors (unlike,
 #| label: fig-count-resid
 #| warning: false
 #| message: false
-
+#| error: true
 
 # Look at the residual plots and save them to the directory
 count.diag.plot <- sf.autoplot.lmer(  count.fit)  # residual and other diagnostic plots
@@ -930,7 +989,7 @@ ggsave(#plot=diag.plot,
 Residual plots are presented in (@fig-count-resid).
 The upper two plots are interpreted in the same way as noted previously. 
 There is some (very weak) evidence of a lack of fit for stems with larger diameters.
-but it is not serious. Caterpiller plots attempt to show the distribution of the random effects. 
+but it is not serious. Caterpillar plots attempt to show the distribution of the random effects. 
 If the model fits well, you would expect the blue dots (the estimated random effect) to lie mostly 
 in the $\pm 2$ standard deviation bands with no obvious outliers. 
 There are no obvious outliers in the stem or bush random effects and there are too few years to say much.
@@ -942,10 +1001,11 @@ model to explain some of the year-specific effects.
 #| echo: false
 #| warning: false
 #| message: false
+#| error: true
 
 #test for autocorrelation by finding the average residual for each year
-# check for autocorreclation 
-count.df$resid <- log(count.df$Berry.count+.5) - predict(count.fit, newdata=count.df, re.form=~0)
+# check for autocorrelation 
+count.df$resid <- log(count.df$Berry.Count+.5) - predict(count.fit, newdata=count.df, re.form=~0)
 mean.resid <- plyr::ddply(count.df, "Year", summarize, mean.resid=mean(resid))
 resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
 count.dwres1 <- car::durbinWatsonTest(resid.fit)
@@ -960,10 +1020,144 @@ have to test and adjust for autocorrelation in the year-specific effect.
 This usually isn’t a problem unless there are 10+ years of data. 
 Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
 The test for autocorrelation commonly used is the Durbin-Watson test and we find
-`r insight::format_p(count.dwres1$p, missing="p is Not avail")` for the test of no autocorrelation.
+`r try(insight::format_p(count.dwres1$p, missing="p is Not avail"),silent=TRUE)` 
+for the test of no autocorrelation.
+
+# Power analysis
+
+A power/sample size analysis was conducted to determine the number of years of sampling needed to detect
+changes over time. The steps in the power/sample size analysis are:
+
+- Compute a single number summarizing the response at this site in each year. The mean berry weight is already a single number per year.
+The mean stem diameter and mean berry count will be computed as averages of averages over the various sampling units to give each bush/branch
+an equal weight. 
+- Analyze the log(mean response) using a simple linear regression. This will give an estimate of the combined year-specific and sampling variation
+around regression line (overall sd).
+- Use the overall SD to estimate power and sample size requirements.
+
+Here are the overall means for each year for each response:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+
+# get the mean values of 1 number per site per year
+berry.weight$Mean.response <- berry.weight$Mean.weight
+berry.weight$Response      <- "Berry weight"
+
+stemd.mean1 <- plyr::ddply(stem.diam, c("STUDY_AREA_NAME","Year","BUSH"), plyr::summarize,
+                                mean.stem=mean(Branch.Diameter..mm., na.rm=TRUE))
+stemd.mean2 <- plyr::ddply(stemd.mean1, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.stem=mean(mean.stem, na.rm=TRUE))
+stemd.mean2$Mean.response <- stemd.mean2$mean.stem
+stemd.mean2$Response      <- "Stem Diameter"
+
+count.mean1 <- plyr::ddply(count.df, c("STUDY_AREA_NAME","Year","BUSH"), plyr::summarize,
+                                mean.count=mean(Berry.Count, na.rm=TRUE))
+count.mean2 <- plyr::ddply(count.mean1, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.count=mean(mean.count, na.rm=TRUE))
+count.mean2$Mean.response <- count.mean2$mean.count
+count.mean2$Response      <- "Berry Count"
+
+all.resp <- plyr::rbind.fill(berry.weight, stemd.mean2, count.mean2)
+all.resp$Mean.weight    <- NULL
+all.resp$Mean.weight.sd <- NULL
+all.resp$mean.stem      <- NULL
+all.resp$mean.count     <- NULL
+all.resp
+
+```
+
+The above data needs to be checked if there are any suspicious values.  
+
+We use the *lm()* function to fit linear regression over time on the log(scale) and obtain the combined year-specific effect (process error) 
+plus sampling variation standard deviation (@tbl-resid-sd).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| tbl-cap: "Estimated residual (process + sampling) standard deviation"
+#| label: tbl-resid-sd
+
+# if any of the values are zero, add a small offset
+all.resp <- plyr::ddply(all.resp, "Response", function(x){
+     offset <- min(x$Mean.response[x$Mean.response>0]) *.5
+     x$Mean.response <- x$Mean.response + offset
+     x
+})
+
+# fit a regression line on the log(scale) and get the residual sd
+residual.sd <- plyr::ddply(all.resp, "Response", function(x){
+    fit <- lm(log(Mean.response) ~ Year, data=x)
+    sd  <- summary(fit)$sigma
+    data.frame(sd=sd)
+})
+
+ft <- flextable(residual.sd)
+ft <- width(ft, j=1, width=2)
+ft <- width(ft, j=2, width=2)
+ft <- colformat_double(ft, j=2, digits=4)
+ft <- set_header_labels(ft, values = list(sd="Process + sampling SD"))
+ 
+ft
+```
+
+This is then used to estimate the power to detect various proportional changes over time (@fig-power).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| fig-cap: "Estimated power to detect proportional changes over time"
+#| label: fig-power
+
+# remove any missing values for resid.sd
+residual.sd <- residual.sd[!is.na(residual.sd$sd),]
+
+# estimate power at changes of 0 to .10/year with sample sizes of 5 to 20 years for each response
+scenarios <- expand.grid(n.years=seq(5,20,1),
+                         slope  =seq(0, .1, .02))
+power.detect <- plyr::ddply(residual.sd, "Response", function(x, scenarios){
+   
+   power <- plyr::adply(scenarios,1, function(scenario,x){
+      #browser()
+      power <- slr.power.stroup(Trend=scenario$slope,
+                                Xvalues=1:scenario$n.years,
+                                Process.SD=x$sd,
+                                Sampling.SD=0)
+      power
+   },x=x)
+}, scenarios=scenarios)
+
+ggplot(data=power.detect, aes(x=n.years, y=power.2s, color=as.factor(slope)))+
+   ggtitle("Estimated power", subtitle="alpha=0.05")+
+   geom_point()+
+   geom_line()+
+   facet_wrap(~Response, ncol=1)+
+   ylab("Power")+xlab("Number of years in the study")+
+   scale_color_discrete(name="Proportional\nyearly\nslope")+
+   xlim(0,NA)+ylim(0,1)+
+   geom_hline(yintercept=0.8)
+
+```
+ 
+The proportional yearly slope indicates the effect size of interest. For example, a value
+of .02 would indicated a 2% change/year in the mean response.
+ 
+In cases of high variability (e.g., in the berry count), the power is uniformly low 
+to detect the yearly proportion change over time. 
+In cases of low variability (e.g., in stem diameter) power is uniformly very high
+to detect the yearly proportion change over time.
+
 
 
 # Summary
+
 Some caution is needed about the interpretation of the slope in 
 short time series. 
 Here most of the stems/bushes were measured for at least two years, 
@@ -985,6 +1179,11 @@ to see if a more appropriate analysis may be more suitable when more
 data are collected and there are many plants that have been measured for many years. 
 At the moment, there appears to be sufficient turnover in the three years that this issue may be moot.
 
+At the moment, with short time series, the estimated power may not be fully reliable because 
+of uncertainty in estimating the residual standard deviation, but is a start to understanding
+how many years would be needed to detect proportion changes over time.
+
+
 
 # References
 
@@ -993,7 +1192,7 @@ lmerTest Package: Tests in Linear Mixed Effects Models.
 Journal of Statistical Software, 82, 1-26. 
 doi:10.18637/jss.v082.i13
  
-R Core Team (2022). R: A language and environment for statistical computing. 
+R Core Team (2023). R: A language and environment for statistical computing. 
 R Foundation for Statistical Computing, Vienna, Austria. 
 https://www.R-project.org/.
 

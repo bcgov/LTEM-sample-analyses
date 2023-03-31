@@ -1,3 +1,83 @@
+########################################################################################
+# Get the ecodomains for a set of longitude/latitudes
+
+get_ecodomain <- function(longlat.df, long.var="LONGITUDE_DD", lat.var="LATITUDE_DD"){
+    # longlat.df  - data frame with longitude and latitude in only 2 columns
+    # uses the eco_provices from bcmaps to get the eco_division
+    # we reduce the set of ecodivisions as outlined in email from Wardrop 2022-11-28
+    require(bcmaps)
+    require(car)
+    # see the help files with bcmaps which has an examples
+    # get the eco.provinces
+    #browser()
+    eco.provinces  <- ecoprovinces(ask=FALSE)
+
+    longlat.sf <- st_as_sf(longlat.df, coords=c(long.var, lat.var), crs = 4326) # use NAD83 crs
+    longlat.sf.t <- transform_bc_albers(longlat.sf)  # convert to BC Albers projection (EPSG:3005),
+
+    # find in which ecodivision each point lies
+    ecodomain <- st_join(longlat.sf.t, eco.provinces["PARENT_ECODIVISION_CODE"]) 
+    
+    # group the ecodivision into ecodomains as suggested in email
+    ecodomain<- car::recode(ecodomain$PARENT_ECODIVISION_CODE,
+                                  " 'SAH'='North';
+                                    'SUA'='North';
+                                    'BOL'='North';
+                                    'NSP'='North';
+                                    'HCH'='HumConHigh';
+                                    'SSH'='SemiAridHigh';
+                                    'CHH'='CoastMtn'  ")
+    
+    ecodomain
+}
+
+
+
+
+
+########################################################################################
+
+# make integer breaks in ggplot
+# see https://joshuacook.netlify.app/post/integer-values-ggplot-axis/
+# ... usage .. scale_x_continuous(break=integer_breaks())
+integer_breaks <- function(n = 5, ...) {
+  fxn <- function(x) {
+    breaks <- floor(pretty(x, n, ...))
+    names(breaks) <- attr(breaks, "labels")
+    breaks
+  }
+  return(fxn)
+}
+
+########################################################################################
+# Functions to compute the diversity profile
+#  Measuring species diversity using the entropy measures of Leinster and Cobbold (2012)
+#  Code taken from http://jonlefcheck.net/2012/10/23/diversity-as-effective-numbers/
+div.profile <- function(community, Z=diag(length(community))){
+  # Compute profile scores for a vector of community abundances
+  # See the Leinster and Cobbold (2012) paper
+  
+  # Input data
+  #   community - vector of species counts in same order as Z matrix
+  #   Z         - similarity matrix for each species vs other species
+  #               default is a diagonal matrix in which every species is treated
+  #               as functionally distinct
+  #   Both community and Z must be ordered in the same way
+  #   PerCover  - the percent cover (response variable) for which diversity matrix measured
+    temp <- community >0
+    community.red <- community[ temp]
+    Z.red <- Z[temp,temp]
+    p <- community.red/sum(community.red)
+    ddply(data.frame(q=c(seq(0,.1,.01),seq(.2,5,.1))), "q", function(q, p){
+      if(abs(q-1)>.05) { diversity <- sum(p*(Z.red%*%p)^(q$q-1))^(1/(1-q$q))}
+      if(abs(q-1)<=.05){ diversity <- exp(-sum(p*log(Z.red%*%p), na.rm=TRUE))}
+      names(diversity) <- 'diversity'
+      diversity
+    }, p=p)  
+  }
+
+
+########################################################################################
 # This function can be used to save diagnostic plots created by autoplot() in ggfortify
 # There currently is a bug where you cannot save the diagnostic plots
 # See see https://github.com/sinhrks/ggfortify/issues/98 for bug in autoplot
@@ -10,6 +90,7 @@ ggsave.ggmultiplot <- function(plot, file=NULL, height=4, width=6, units="in", d
   invisible()
 }
 
+########################################################################################
 
 # Create residual and other diagnostic plots from lmer() objects.
 sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
@@ -108,6 +189,127 @@ sf.autoplot.lmer <- function(model, ..., which=TRUE, mfrow=c(2,2)){
   # browser()
   gridplots <- do.call(arrangeGrob, plots.subset)
   gridplots  # return the final object
+}
+
+
+########################################################################################
+
+# Simple Linear regression Power function that incorporates process and sampling error
+# While this is commonly used for trend analysis where the X variable is time, it can
+# also be used for any regression problem.
+# Autocorrelation is not accounted for in this power analysis.
+
+# 2014-11-21 CJS Removed Ivalue from the call as not needed
+# 2014-06-24 CJS First Edition for web
+
+# This function computes the power for a simple linear regression design that allows
+# for process and sampling error
+#
+# The information we need is:
+#     Alpha level (usually .05 or .10)
+#     Variance components (these were obtained from the an analysis of previous data)
+#        Process.SD  - standard deviation of the process variation over the X value
+#        Sampling.SD - standard deviation of the sampling variation at each X value
+#     Trend   - slope for which the power to detect is to be estimated
+#     X       - vector of X values. These can be in any order. Multiple X values
+#               indicated multiple measurements at each X value.
+
+
+# The computations are based on the 
+#    Stroup, W. W. (1999)
+#    Mixed model procedures to assess power, precision, and sample size in the design of experiments.
+# paper where "dummy" data is generated and "analyzed" and the resulting F-statistics etc
+# provide information needed to compute the power
+
+library(lme4)
+
+
+#-----------------------------------------------
+
+slr.power.stroup <- function(Trend, Xvalues, Process.SD, Sampling.SD, alpha=0.05){
+# This computes the power of a simple linear regression that potentially includes 
+# process and sampling error. Arguments are defined above
+
+# There are 3 cases to consider
+# (a) Process.SD >0, Sampling.SD >0, replicates at some X values
+#      This is the classical regression model with process error and sampling error.
+#      Because there are multiple measurements at some X values, it is possible to
+#      fit a model of the form
+#        lmer( Y ~ X + (1|XF), data=blah)
+#      where XF are the X values treated as a factor.
+#      In this case, the df for testing a hypothesis about the slope is
+#      approximately equal to the
+#          number of unique X values - 2 (essentially, you analze the averages)
+#      The power refers to the ability to detect a non-zero slope of the lmer model.
+#
+# (b) Process.SD >0, Sampling.SD >0, NO replicates at any X value
+#     This is quite common where an estimate of a population parameter is obtained
+#     each year with a measure of precision (SE of each estimate). The sampling SD
+#     is essentially the average of the SE. Process error is obatined by subtracting
+#     the average SE from the residual sd after fitting a mean (or simple slope)
+#     In this case, all that need be done is fit a 
+#           lm( Y ~ X, data=blah)
+#     as then the resiudal sd is the (proper) mixture of process and sampling SD
+#     The df for hypothesis tests about the slope is again approximately equal to 
+#           number of unique X values - 2
+#     If you want to investigate the impact of increasing effort in each year, treat
+#     the current average se as obtained from a "unit of effort". So if you take two 
+#     measurement at an X value, this is (approximately) equivalent to doubling the effort.
+#
+# (c) Process.SD = 0, Sampling.SD >0, any set of X values (with or without replicates
+#     at an paticular X values)
+#     This is a classical simple linear regression with data points scattered about
+#     the regression line and all points are independent of all other points,i.e.
+#          lm(Y ~ X)
+#     This is a VERY strong assumption and typically not valid when testing for 
+#     trends over time where it is VERY common to have a process error that corresponds to
+#     year specific effects over which you typically do not have any control.
+#     The df for testing hypothese about the slope is number of data points - 2.
+      
+  # Total sample size
+  n <- length(Xvalues)
+  # Compute the mean response (before adding process o sampling error)
+  mu <- 0 + Trend*(Xvalues-min(Xvalues))
+  
+  # Create the various design matrices
+  # Fixed effects
+  X  <- cbind(1, Xvalues)
+  XF <- model.matrix(~ -1 +as.factor(Xvalues))
+
+  # We solve for the regression estimates using weighted least squares
+  # based on the variance-covariance matrix for the data
+  V <- diag(Sampling.SD^2,n,n) + XF %*% t(XF)*Process.SD^2 
+
+  # Get fixed effects and fixed effects varcovar matrix
+  beta <- solve(t(X)%*%solve(V)%*%X) %*% t(X)%*%solve(V)%*%mu
+
+# the vector to extract the slope coefficient
+  K <- c(0,1)
+
+#  calculate the non-centrality parameter, and then the power
+  ncp <- as.numeric(t(t(K)%*%beta)%*%solve(t(K)%*%solve(t(X)%*%solve(V)%*%X)%*%K)%*%(t(K)%*%beta))
+
+# What is the denominator df for the hypothesis test. See notes above
+  dfdenom <- length(unique(Xvalues))-2 # approximation to df for slope is number of unique X values -2 
+  if(Process.SD ==0){ dfdenom = length(Xvalues)-2}
+
+  Fcrit <- qf(1-alpha, 1, dfdenom)
+  power.2s <- 1 - pf(Fcrit, 1, dfdenom,ncp)
+
+#  Compute the one-sided power, i.e. to detect the change in one direction only
+#  Because I don't know which direction of interest, the one-sided power is 
+#  computed in both directions.
+#
+  Tcrit <- qt(1-alpha,dfdenom)
+  power.1s.a <- 1-pt(Tcrit,dfdenom,sqrt(ncp))
+  power.1s.b <- pt(-Tcrit,dfdenom,sqrt(ncp))
+
+  data.frame(alpha=alpha, 
+            Trend=Trend, 
+            Process.SD=Process.SD, Sampling.SD=Sampling.SD,
+            Beta0=beta[1], Beta1=beta[2],
+            dfdenom=dfdenom, ncp=ncp, Fcrit=Fcrit, power.2s=power.2s,
+            Tcrit=Tcrit, power.1s.a=power.1s.a, power.1s.b=power.1s.b)
 }
 
 

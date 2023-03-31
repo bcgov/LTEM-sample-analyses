@@ -1,0 +1,828 @@
+---
+# This script will demonstrate how to analyze the waterfowl data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+
+# Notice that this example only has 2 years of data. We simulate a third year to illustrate
+# how to do a trend analysis.
+#
+# THIS IS A comparison of trends by ECODOMAIN
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2022-12-02 Convert to quatro
+# 2017-02-28 First Edition
+
+# Summary of Protocol
+#    Establish observation points at enough sites 
+#    to provide views of the entire survey area. … 
+#
+#    Choose a date after which migrants are mostly gone. 
+#    Count on 3 separate occasions during a 2-3 week period and keep highest count.
+
+title: "Waterfowl - LTEM - EcoDomain Comparison" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+options(width=200)
+
+# load libraries
+library(bcmaps)    # to get the EcoDomains
+library(broom.mixed)# for handling output from lmerTest
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(emmeans)   # for extracting the individual slopes
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(sf)
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+```
+
+
+# Summary of Waterfowl LTEM protocol
+
+## Basic protocol
+
+As taken from the protocol document:
+
+> “Establish observation points at enough sites to provide views of the entire survey area. … 
+> 
+> Choose a date after which migrants are mostly gone. Count on 3 separate occasions during a 2-3 week period and keep > highest count.”
+
+The data collected under this protocol at each survey consists of the following variables:
+
+-	Species. The species of waterfowl counted.
+-	Sex. The sex of the species. 
+-	Count. The number of birds of this species and sex. Choose a date after which migrants are mostly gone 
+
+## Database structure
+
+The relevant fields extracted from the database are:
+
+-	*SAMPLE_LABEL*. The label for the location where data was located.
+-	*Date*. The date the data was collected. The *Year* is extracted from this date.
+-	*Species*. What species were seen
+-	*Count*. Count of the number of birds of each species.
+
+The longitude and latitude are used to find the EcoDomain of each study area.
+
+
+# Reading and checking the data
+
+## Extract all LTEM data
+
+The database was queried for all observations from this protocol in the Province.
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Waterfowl", site.names="**ALL**")
+```
+
+
+```{r}
+#| echo: false
+if(nrow(data.extract$user.data)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. See help \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+waterfowl.df <- data.extract$user.data
+waterfowl.df$STUDY_AREA_NAME_shrt <- substr(waterfowl.df$STUDY_AREA_NAME,1,20)
+
+```
+
+The following surveys and years of surveys were found.
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+```
+
+It is not necessary that every STUDY_AREA be measured in every year and the number of measurements at each STUDY_AREA
+can vary within years and across years.
+
+If STUDY_AREA is only measured in one year, it does not provide any information
+on the trends and can be dropped. Similary, STUDY_AREAS with only 2 years of data, provide no information 
+on the uncertainty; they can be retained or dropped.
+
+STUDY_AREAs dropped for insuffient data are:
+
+```{r}
+#| echo: false
+#| tbl-cap: 'Study areas dropped because of insufficient years of data'
+n.years <- plyr::ddply(waterfowl.df, c("STUDY_AREA_NAME"), plyr::summarize, n.years=length(unique(Year)))
+n.years.drop <- n.years[ n.years$n.years <2,]
+
+waterfowl.df <- waterfowl.df[ !waterfowl.df$STUDY_AREA_NAME %in% n.years.drop$STUDY_AREA_NAME,]
+
+ft <- flextable(n.years.drop)
+ft <- width(ft, j=1, width=4, unit="in")
+ft <- set_header_labels(ft, STUDY_AREA_NAME="Study Area", n.years="# years of data")
+ft
+```
+
+
+## Ecodomain of each study area
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not provided as noted below: 
+
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(waterfowl.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD),
+     LATITUDE_DD = mean(LATITUDE_DD))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data \n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+```
+
+**How is it possible that long/lat is not know for some study area?**
+
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+     cat("\n\n\n*** ERROR *** Some study areas do not have an ecodomain \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area
+cat("# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area\n")
+
+waterfowl.df <- merge(waterfowl.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+## Checking species code
+
+There are many species of waterfowl.
+
+**This table shows the total detections for each species.year combination in all STUDY_AREAs and EcoDomains**
+
+This should be checked that only species of interest are recorded.
+Note that in many years, a code of *NULL* was entered to indicate no waterfowl of any species
+were detected. 
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(COUNT~SPECIES_CODE+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+
+if(length(unique(waterfowl.df$SPECIES_CODE))>1){
+   cat("*** WARNING *** More than one species name found - OK if some are NULL \n")
+   #stop()
+}
+
+```
+
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+if(!dir.exists(file.path("Plots","zzMultiSite")))dir.create(file.path("Plots","zzMultiSite"))
+file.prefix <- file.path("Plots", "zzMultiSite")
+```
+
+# Multi-Site Analysis
+
+We will now compare the trends in the EcoDomains. 
+
+This design has multiple STUDY_AREA_NAMES that are repeatedly measured over time. 
+Please refer to the Fitting Trends with Complex Study Designs document in the 
+CommonFile directory for information on fitting trends with complex study designs. 
+
+All analyses were done using the R (R Core Team, 2023)  analysis system. 
+All plots are also saved as separate *png files for inclusion into other reports.
+
+
+## Maximum counts
+
+The data is first summarized to the date level by summing the count over the different species
+for each date-sample station combination. 
+This reduces the data to one measurement per date per site/year. 
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+count.date <- plyr::ddply(waterfowl.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","Date","SAMPLE_LABEL"), 
+                          plyr::summarize,
+                          total.count=sum(COUNT, na.rm=TRUE))
+
+count.date$SA.SAMPLE_LABEL <- paste0(count.date$STUDY_AREA_NAME, "....", count.date$SAMPLE_LABEL)
+
+temp <- count.date
+temp$STUDY_AREA_NAME <- NULL
+head(temp)
+
+```
+
+
+### Preliminary plot
+
+A summary plot of the total count in each year for each STUDY_AREA  is shown in @fig-call-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-count-prelim
+#| warning: false
+#| message: false
+
+prelim.plot <- ggplot(data=count.date, aes(x=Year, y=log(total.count+.5), color=STUDY_AREA_NAME_shrt))+
+   ggtitle("Waterfowl (total) count data",
+           subtitle="Each line represents one site in a study area")+
+   ylab("log(Total Count+.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=SA.SAMPLE_LABEL), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+ggsave(plot=prelim.plot, 
+       file=file.path(file.prefix,'Plot-count-date-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+Each line represents a particular station within a STUDY_AREA. 
+
+
+### Obtain maximum count in N/D/J/F 
+
+Next the maximum count in each month in each station is found. The maximum counts are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# Find the maximum count each month (Nov/Dec/Jan/Feb only)
+count.date$Month  <- lubridate::month(count.date$Date)
+count.max <- plyr::ddply(count.date, 
+                         c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","SAMPLE_LABEL","SA.SAMPLE_LABEL","Year","Month"), 
+                         plyr::summarize, 
+                         max.count=max(total.count, na.rm=TRUE))
+count.max$Year.Month <- count.max$Year+((count.max$Month-.5)/12)     # this is the approximate midpoint of each month
+temp <- count.max
+temp$Year.Month      <- NULL
+temp$STUDY_AREA_NAME <- NULL
+temp$SA.SAMPLE_LABEL <- NULL
+temp
+```
+
+When the maximum counts are restricted to November, December, January, and February, the
+data are now:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+count.max <- count.max[ count.max$Month %in% c(1:2,11:12),]  # only retain N/D/J/F data
+temp <- count.max
+temp$Year.Month <- NULL
+temp$Year.Month      <- NULL
+temp$STUDY_AREA_NAME <- NULL
+temp$SA.SAMPLE_LABEL <- NULL
+temp
+```
+
+Many STUDY_AREA_NAMEs were NOT measured in N/D/J/F, so the remainining data are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=count.max, exclude=NULL, na.action=na.pass)
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=count.max, exclude=NULL, na.action=na.pass)
+```
+
+**Does this seem right that most study areas have NO overwintering waterfowl?**
+**Does this seem right that we now only have 1 ECODOMAIN**. No analysis is possible to compare trends across ECODOMAINS.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+if(nrow(count.max)==0){
+   cat("*** ERROR *** No data left to analyze when restricting data to J/F/N/D months \n")
+   knitr::knit_exit()
+}
+
+if(length(unique(count.max$ECODOMAIN))<2){
+   cat("*** ERROR *** Only one ecodomain left. No analysis comparing trends across ECODOMAINS is possible\n")
+  knitr::knit_exit()
+}
+
+```
+
+Because only 1 ecodomain is left, the code below likely won't work but is sketched out.
+
+The maximum counts are plotted in @fig-wf-prelim2.
+As noted earlier, a better measure may be the median count rather than the mean count.
+The analysis would proceed in a similar fashion.
+
+```{r}
+#| echo: false
+#| fig-cap: "Plot of the maximum count in each station in November through February. Data is plotted on the logarithmic scale because of the wide range of values. Because of potential zeros in the data, 0.5 was added to all points only for plotting purposes."
+#| label: fig-wf-prelim2
+#| warning: false
+#| message: false
+
+prelim.plot2 <- ggplot(data=count.max, aes(x=Year, y=log(max.count+.5), color=STUDY_AREA_NAME_shrt))+
+   ggtitle("Waterfowl (total) count data",
+           subtitle="Each line represents one site in a study area")+
+   ylab("log(Maximum Total Count+.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=SA.SAMPLE_LABEL), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot2
+ggsave(plot=prelim.plot2,
+       file=file.path(file.prefix,'Plot-count-max-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+Again there may be evidence of a consistent station effect and/or a consistent month effect.
+
+
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs)
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each site (SAMPLE_LABEL) is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The model, in a short-hand notation is:
+
+$$log(AvgCalls+.5) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{SampleLabel(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where
+
+- $log(AvgCalls)$ is logarithm of the average number of calls for that transect in that year. An offset of 0.5
+is used to avoid taking the logarithm of 0.
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time.
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{SampleLabel(R)}$ represents the (random) effect of the different sites within a study area.;
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The
+The $\mathit{SampleLabel(R)}$ term allows for the fact that site-specific conditions
+may tend to affect the counts on this site within a study area consistently over time.
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error)
+caused by environmental factors (e.g., a warmer than normal year may elict more calls from squirrels).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time,
+so that the when the actual fit is done on the logarithmic scale,
+the trends are linear. For example, a trend may assume that there is constant
+5% change over time rather than a fixed 1-unit change per year.
+Some caution is needed if any of the values are 0 as log(0) is not defined.
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset)
+is added to all values before the analysis proceeds.
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023).
+
+```{r}
+#| echo: false
+#|
+
+count.fit.pvalue     <- NA # in case the model does not fit
+count.fit.slope      <- NA
+count.fit.slope.se   <- NA
+count.fit.slope.anti <- NA
+
+# create factors
+count.max$ECODOMAINF       <- factor(count.max$ECODOMAIN)
+count.max$YearF            <- factor(count.max$Year)
+count.max$STATION          <- factor(count.max$SA.SAMPLE_LABEL)
+count.max$STUDY_AREA_NAMEF <- factor(count.max$STUDY_AREA_NAME)
+
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+count.fit <- lmerTest::lmer(log(max.count+.5) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|STATION) +
+                (1|YearF:ECODOMAINF), data=count.max)
+
+cat("\n\n")
+anova(count.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(count.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-test-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-test-eco-slopes
+
+#temp <-anova(count.fit, ddf="Kenward-Roger")
+temp <-anova(count.fit, ddf="Satterthwaite")
+#temp
+
+count.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+count.fit.slope  <- fixef(count.fit)[2]
+count.fit.slope.se <- sqrt(diag(vcov(count.fit)))[2]
+
+count.fit.slope.anti <- exp(count.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(count.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(count.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas
+in the EcoDomain) shown in @tbl-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(count.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-count-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in mean squirrel counts."
+#| label: fig-count-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count+.5), so we need to back transform
+count.fitted <- unique( count.max[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+count.fitted <- plyr::adply(count.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(count.max$Year, na.rm=TRUE), max.year=max(count.max$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+count.fitted$pred.ecodomain.mean.log <- predict(count.fit, newdata=count.fitted,type="response", re.form=~0)
+count.fitted$pred.ecodomain.mean <- exp(count.fitted$pred.ecodomain.mean.log) - .5
+#head(count.fitted)
+
+fitted.plot <- ggplot(data=count.max.mean, aes(x=Year, y=log(mean.calls+.5)))+
+   ggtitle("Squirrel count data")+
+   ylab("log(Mean count+.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=count.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.plot
+ggsave(plot=fitted.plot,
+       file=file.path(file.prefix,'Plot-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-var-comp
+
+
+temp <- as.data.frame(VarCorr(count.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *TRANSECT* component represents the variation in intercepts among multiple transects within the same STUDY_AREA.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(count.max, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        count.fit <- lmerTest::lmer(log(mean.calls+.5) ~ Year + (1|TRANSECTF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(count.fit)["Year"]
+        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"]
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")+
+   coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-year-effects
+
+year.eff <- ranef(count.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g.,
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-count-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-count-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(count.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot,
+       file=file.path(file.prefix,"Plot-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs.
+the fitted values. A good plot will show a random scatter around 0.
+Any large deviations from 0 should be investigated as potential outliers.
+In the upper right is a normal probability plot. Points should be close to the dashed reference line.
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome.
+Caterpiller plots attempt to show the distribution of the random effects.
+The bottom left plot shows the distribution of the transect effects.
+The bottom right plot shows the distribution of the year-specific effects (process variation).
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+# Summary
+
+This analysis examines trends across EcoDomains. The model has an overall average trend, a EcoDomain specific trend,
+and random trends for each Study Area among the EcoDomain trends. With many study areas and many years of data collected
+in each study area, the design has a high power to detect even a moderate trend over time.
+
+This model used the approximate analysis on the logarithm of the average counts per transect. 
+It is possible to analyze the actual raw counts using a generalized linear mixed model – 
+this was not done in this example because of the extreme smallness of the dataset. 
+Once many more years are collected, this may be an alternative analysis 
+that will more naturally deal with 0 counts without having to add a small constant.
+
+# References
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017).
+“lmerTest Package: Tests in Linear Mixed Effects Models.” 
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13 <https://doi.org/10.18637/jss.v082.i13>.
+
+Lenth R (2023). emmeans: Estimated Marginal Means, aka Least-Squares Means.
+R package version 1.8.4-1,
+  <https://CRAN.R-project.org/package=emmeans>.
+
+R Core Team (2032). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+

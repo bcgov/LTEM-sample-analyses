@@ -1,0 +1,1935 @@
+---
+# This script will demonstrate how to analyze the Soapberry data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+#
+# Only one study area at time can only be analyzed with this script. 
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2022-11-20 Revised edition 
+#    - changed to using Quarto to integrate the MSWord and R code together into one document
+# 2017-02-28 First Edition
+
+# Summary of Protocol
+#   We count the number of berries produced on the exact same stems 
+#   of soapberry bushes each year to give an index of soapberry production. 
+#   No attempt to measure the total biomass production of soapberries per hectare.
+#
+#   Choose an area rich in soapberries is located for permanent monitoring. 
+#   Choose 10 robust plants. Mark 2 branches on each plant for sampling.
+#   The number of berries on each branch is recorded.
+#   The branch diameter (mm) is also recorded
+#
+#   A sample of 25-50 ripe berries is selected and measured for average mass.
+#
+
+title: "Soap Berry - LTEM - EcoDomain Comparison" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+options(width=200)
+
+# load libraries
+library(bcmaps)    # to get the EcoDomains
+library(broom.mixed)# for handling output from lmerTest
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(emmeans)   # for extracting the individual slopes
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggisotonic)# for power plotting
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(sf)
+library(simr)      # for power analysis
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+
+# make the multisite directories
+Plots.dir <- file.path("MultiYear-Plots")
+if(!file.exists(Plots.dir))dir.create(Plots.dir)
+
+```
+
+
+# Summary of Soap Berry LTEM protocol
+
+## Basic protocol
+
+Areas rich in soapberries is located for permanent monitoring. 
+In each area, 10  robust bushes are chosen, and two stems on each 
+plant are chosen for sampling. The stems and bushes are marked with 
+permanent tags so that they can be revisited each year.
+
+There are three measures taken in this protocol.
+
+-	Berry count. The number of berries produced on the stem is 
+recorded as an index of soapberry production. 
+-	Stem diameter. The diameter (in millimeters) 
+of the stem near its base is measured. 
+-	Mean berry weight. A collection of 25-50 ripe red berries is 
+obtained in August and weighed so the average wet weight of 
+a single berry from each area is obtained. 
+
+If the tagged stem has died (or is damaged or the tag on the stem has “disappeared”), 
+a new stem is chosen. This may be from a new bush or the same bush. 
+If the stem has been browsed, then no count is conducted on this stem this year.
+
+If the tagged bush has died (or the tags on all of the stems have “disappeared”), 
+a new bush is selected for subsequent monitoring.
+
+## Database structure
+
+The relevant fields extracted from the database are:
+
+The relevant fields from the database are:
+
+-	*STUDY_AREA_NAME*. The name of the study area.
+-	*SAMPLE_STATION_LABEL*. The bush/stem label.
+-	*Date*. The date the data was collected. The Year is extracted from this date.
+-	*Berry_Count.* The number of soap berries on this stem. 
+If the stem is browed (or damaged) a missing value should be entered here and not the value of 0.
+-	*Stem_Diameter*. The diameter (mm) of the stem.
+-	*Average_Weight*. The average weight of a sample of berries is collected. 
+Notice that there is only ONE mean weight found per year and so this value  
+is replicated on every stem line of the sheet. The sample size used to determine the weight is in a separate column.
+It is assumed that 0's have been already imputed on the database.
+
+The longitude and latitude are used to find the EcoDomain of each study area.
+
+
+# Reading and checking the data
+
+## Extract all LTEM data
+
+The database was queried for all observations from this protocol in the Province.
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Berries", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+test <- read.LTEM.data(study.type="Berries", site.names="beatton", .name_repair=TRUE)
+
+test <- test$user.data
+test[,c("STUDY_AREA_NAME","Year","Mean.Berry.Weight..gm.")]
+
+```
+
+```{r}
+#| echo: false
+if(nrow(data.extract$user.data)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. See help \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+soop.df <- data.extract$user.data
+soop.df$STUDY_AREA_NAME_shrt <- substr(soop.df$STUDY_AREA_NAME,1,20)
+
+```
+
+The following surveys and years of surveys were found.
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=soop.df, exclude=NULL, na.action=na.pass)
+```
+
+It is not necessary that every STUDY_AREA be measured in every year and the number of measurements at each STUDY_AREA
+can vary within years and across years.
+
+If STUDY_AREA is only measured in one year, it does not provide any information
+on the trends and can be dropped. Similary, STUDY_AREAS with only 2 years of data, provide no information 
+on the uncertainty; they can be retained or dropped.
+
+STUDY_AREAs dropped for insuffient data are:
+
+```{r}
+#| echo: false
+#| tbl-cap: 'Study areas dropped because of insufficient years of data'
+n.years <- plyr::ddply(soop.df, c("STUDY_AREA_NAME"), plyr::summarize, n.years=length(unique(Year)))
+n.years.drop <- n.years[ n.years$n.years <2,]
+
+soop.df <- soop.df[ !soop.df$STUDY_AREA_NAME %in% n.years.drop$STUDY_AREA_NAME,]
+
+ft <- flextable(n.years.drop)
+ft <- width(ft, j=1, width=4, unit="in")
+ft <- set_header_labels(ft, STUDY_AREA_NAME="Study Area", n.years="# years of data")
+ft
+```
+
+
+## Ecodomain of each study area
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not provided as noted below: 
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(soop.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data \n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+```
+
+**How is it possible that long/lat is not know for some study area?**
+
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+     cat("\n\n\n*** ERROR *** Some study areas do not have an ecodomain \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area
+cat("# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area\n")
+
+soop.df <- merge(soop.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+cat("Records in remaining sites where ECODOMAIN could be determined\n")
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=soop.df, exclude=NULL, na.action=na.pass)
+
+```
+
+
+## Checking species code
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=soop.df, exclude=NULL, na.action=na.pass)
+
+if(length(unique(soop.df$SPECIES_CODE))>1){
+   cat("*** WARNING *** More than one species name found - OK if some are NULL \n")
+   #stop()
+}
+
+```
+
+**Is only SHEPCAN to be analyzed in this document??**
+
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+file.prefix <- Plots.dir
+```
+
+# Multi-Site Analysis
+
+This design has multiple stems on bushes that are repeatedly measured over time. 
+Please refer to the Fitting Trends with Complex Study Designs document in the 
+CommonFile directory for information on fitting trends with complex study designs. 
+
+All analyses were done using the R (R Core Team, 2022)  analysis system. 
+All plots are also saved as separate *png files for inclusion into other reports.
+
+```{r}
+#| echo: false
+#################################################################################
+#################################################################################
+#################################################################################
+```
+
+## Mean berry weight.
+
+This measurement is taken at the STUDY_AREA_NAME level and so there is one measurement 
+available per STUDY_AREA_NAME.year. Notice that this value is replicated multiple times in the 
+database for each individual stem. 
+These are NOT real replicated readings but only an artifact of the database 
+so some care is needed to extract only a single value per STUDY_AREA_NAME.year.
+
+
+### Summarize to STUDY_AREA_NAME.year level
+
+The data is first summarized to the STUDY_AREA_NAME.year level by extracting
+a single value for the mean berry weight from the repeated values in the database.
+
+```{r}
+#| echo: false
+
+
+#  Analysis of the mean weight of berries.
+
+# Look at mean weight of berries over time
+# Remember there is only one value per year so we need to extract from the database.
+# We take the mean for each year. 
+
+soop.df$Mean.Berry.Weight..gm. <- as.numeric(soop.df$Mean.Berry.Weight..gm.)
+
+
+berry.weight <- plyr::ddply(soop.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year"), plyr::summarize, 
+                            Mean.Berry.Weight..gm.   =mean(Mean.Berry.Weight..gm., na.rm=TRUE)
+                            )
+```
+
+The summary data is:
+
+```{r}
+#| echo: false
+
+berry.weight
+```
+
+**Why is mean berry weight missing for so many site years?**
+
+### Preliminary plot
+
+A summary plot of the mean berry weight in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-bweight-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-bweight-prelim
+#| warning: false
+#| message: false
+
+
+prelim.bweight.plot <- ggplot(data=berry.weight, aes(x=Year, y=Mean.Berry.Weight..gm.))+
+   ggtitle("Mean berry weight",
+           subtitle="Each line represents one study area")+
+   ylab("Mean berry weight (g)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.bweight.plot 
+ggsave(plot=prelim.bweight.plot, 
+       file=file.path(file.prefix,'Plot-bweight-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+**Strange value in Coast Mountains ECODOMAIN that needs investigation**
+
+We notice that the *North* EcoDomain only has a single site with a single year and so cannot be used in the
+analysis. In general, each EcoDomain needs at least one site with at least 3 years of data.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+berry.weight <- berry.weight[ !is.na(berry.weight$Mean.Berry.Weight..gm.),]  # remove missing values
+
+# see that each EcoDomain has at least one site with at least 3 years.
+n.years <- plyr::ddply(berry.weight, c("ECODOMAIN","STUDY_AREA_NAME"), plyr::summarize,
+                       n.years = length(unique(Year)))
+n.years.by.eco <- plyr::ddply(n.years, c("ECODOMAIN"), plyr::summarize, 
+                       n.sites.at.least.3.years = sum(n.years>=3))
+select <- n.years.by.eco$n.sites.at.least.3.years < 1
+if(sum(select)>0){
+    cat("Following ECODOMAINS removed because not enought sites with enough years")
+    n.years.by.eco[select,]
+}
+
+berry.weight <- berry.weight[ !berry.weight$ECODOMAIN %in% n.years.by.eco$ECODOMAIN[select],]
+
+```
+
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each transect is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The analysis is done on the logarithmic scale so that trends over have a simple interpretation.
+
+The model, in a short-hand notation is:
+
+$$log(MeanBerryWeight) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(MeanBerryWeight)$ is logarithm of the mean berry weight in that year for a STUDY_AREA. 
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may yield larger berries, on average).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+bweight.fit.pvalue     <- NA # in case the model does not fit
+bweight.fit.slope      <- NA
+bweight.fit.slope.se   <- NA
+bweight.fit.slope.anti <- NA
+
+# create factors
+berry.weight$ECODOMAINF       <- factor(berry.weight$ECODOMAIN)
+berry.weight$YearF            <- factor(berry.weight$Year)
+berry.weight$STUDY_AREA_NAMEF <- factor(berry.weight$STUDY_AREA_NAME)
+
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+bweight.fit <- lmerTest::lmer(log(Mean.Berry.Weight..gm.) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|YearF:ECODOMAINF), data=berry.weight)
+
+cat("\n\n")
+anova(bweight.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(bweight.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-test-bweight-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-test-bweight-eco-slopes
+
+#temp <-anova(bweight.fit, ddf="Kenward-Roger")
+temp <-anova(bweight.fit, ddf="Satterthwaite")
+#temp
+
+bweight.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+bweight.fit.slope  <- fixef(bweight.fit)[2]
+bweight.fit.slope.se <- sqrt(diag(vcov(bweight.fit)))[2]
+
+bweight.fit.slope.anti <- exp(bweight.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-bweight-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-bweight-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(bweight.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean berry weight per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(bweight.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-bweight-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-bweight-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(bweight.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-bweight-count-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in mean berry weight."
+#| label: fig-bweight-count-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count+.5), so we need to back transform
+bweight.fitted <- unique( berry.weight[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+bweight.fitted <- plyr::adply(bweight.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(berry.weight$Year, na.rm=TRUE), max.year=max(berry.weight$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+bweight.fitted$pred.ecodomain.mean.log <- predict(bweight.fit, newdata=bweight.fitted,type="response", re.form=~0) 
+bweight.fitted$pred.ecodomain.mean <- exp(bweight.fitted$pred.ecodomain.mean.log) 
+#head(bweight.fitted)
+
+fitted.plot <- ggplot(data=berry.weight, aes(x=Year, y=log(Mean.Berry.Weight..gm.)))+
+   ggtitle("Berry mean weight")+
+   ylab("log(Berry mean weight (g))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=bweight.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.plot 
+ggsave(plot=fitted.plot, 
+       file=file.path(file.prefix,'Plot-bweight-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-bweight-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-bweight-var-comp
+
+
+temp <- as.data.frame(VarCorr(bweight.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-bweight-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-bweight-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(berry.weight, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        bweight.fit <- lm(log(Mean.Berry.Weight..gm.) ~ Year , data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = coef(bweight.fit)["Year"]
+        slope.se        = summary(bweight.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(bweight.fit)$coefficients[row.names(summary(bweight.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")+
+   coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-bweight-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-bweight-year-effects
+
+year.eff <- ranef(bweight.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-bweight-count-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-bweight-count-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(bweight.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-bweight-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+
+
+
+
+```{r}
+#| echo: false
+#################################################################################
+#################################################################################
+#################################################################################
+```
+
+##  Stem Diameter.
+
+This measurement is taken at the stem level and so there is one value per stem/bush/year. 
+The same stem is repeatedly measured over time, but stems may leave the protocol (damaged or dead) 
+or be added to the protocol (replacement stem) over time. 
+All of the models below automatically will account for stems that are 
+removed or added as long as each stem has a unique label within a site.
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+soop.df$Branch.Diameter..mm. <- as.numeric(soop.df$Branch.Diameter..mm.)
+
+temp <- soop.df
+temp$STUDY_AREA_NAME <- NULL
+head(temp[,c("STUDY_AREA_NAME_shrt","ECODOMAIN","Year","BUSH","STEM","Branch.Diameter..mm.")])
+
+# make a bush and stem label that is unique to each study area names
+soop.df$SA.BUSH <- paste0(soop.df$STUDY_AREA_NAME, "....", soop.df$BUSH)
+soop.df$SA.STEM <- paste0(soop.df$STUDY_AREA_NAME, "....", soop.df$STEM)
+
+```
+
+Missing values are excluded. If there are some records with a reported diameter of 0 -- these likely need to be checked.
+
+```{r}
+#| echo: false
+cat("Number of records prior to removing NA\n")
+dim(soop.df)
+stemd.df <- soop.df[ !is.na(soop.df$Branch.Diameter..mm.),]
+
+cat("\n\nNumber of records after to removing NA\n")
+dim(stemd.df)
+
+cat("\n\nRecord with 0 branch diameter that need attending \n")
+select <- stemd.df$Branch.Diameter..mm.==0
+stemd.df[select, c("STUDY_AREA_NAME","Year","BUSH","STEM","Branch.Diameter..mm.")]
+
+stemd.df <- stemd.df[ !select,]
+```
+
+### Preliminary plot
+
+A summary plot of the mean stem diameter in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-stemd-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-stemd-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+bush.mean <- plyr::ddply(stemd.df, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   Branch.Diameter..mm.=mean(Branch.Diameter..mm., na.rm=TRUE))
+
+prelim.stemd.plot <- ggplot(data=bush.mean, aes(x=Year, y=log(Branch.Diameter..mm.)))+
+   ggtitle("Stem diameter data",
+           subtitle="Each line represents one study area")+
+   ylab("log(mean Branch Diameter (mm)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.stemd.plot 
+ggsave(prelim.stemd.plot, 
+       file=file.path(file.prefix,'Plot-stemd-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+**Need to check out the odd value for Coast Mountain stem diameter**.
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each BUSH and STEM is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The model, in a short-hand notation is:
+
+$$log(BranchDiameter) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{Bush(R)} +\mathit{Stem(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(BranchDiameter)$ is logarithm of the branch diameter on that bush and stem in that year. 
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{Stem(R)}$ represents the (random) stem effect; 
+- $\mathit{Bush(R)}$ represents the (random) bush effect; 
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The 
+The $\mathit{Stem(R)}$ and $\mathit{Bush(R)}$ terms allows for the fact that bush and stem specific conditions 
+may tend to affect the branch diameter consistently over time. 
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may lead to larger branch diameters).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+stemd.fit.pvalue     <- NA # in case the model does not fit
+stemd.fit.slope      <- NA
+stemd.fit.slope.se   <- NA
+stemd.fit.slope.anti <- NA
+
+# create factors
+stemd.df$ECODOMAINF       <- factor(stemd.df$ECODOMAIN)
+stemd.df$YearF            <- factor(stemd.df$Year)
+stemd.df$BUSHF            <- factor(stemd.df$SA.BUSH)
+stemd.df$STEMF            <- factor(stemd.df$SA.STEM)
+stemd.df$STUDY_AREA_NAMEF <- factor(stemd.df$STUDY_AREA_NAME)
+year.offset <- 2000
+stemd.df$Year             <- stemd.df$Year-year.offset
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+stemd.fit <- lmerTest::lmer(log(Branch.Diameter..mm.) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|BUSHF) + (1|STEMF)+ 
+                (1|YearF:ECODOMAINF), data=stemd.df)
+
+cat("\n\n")
+anova(stemd.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(stemd.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-test-stemd-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-test-stemd-eco-slopes
+
+#temp <-anova(stemd.fit, ddf="Kenward-Roger")
+temp <-anova(stemd.fit, ddf="Satterthwaite")
+#temp
+
+stemd.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+stemd.fit.slope    <- fixef(stemd.fit)[2]
+stemd.fit.slope.se <- sqrt(diag(vcov(stemd.fit)))[2]
+
+stemd.fit.slope.anti <- exp(stemd.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(stemd.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(stemd.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-stemd-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-stemd-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(stemd.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-stemd-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in mean branch diameter."
+#| label: fig-stemd-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count), so we need to back transform
+stemd.fitted <- unique( stemd.df[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+stemd.fitted <- plyr::adply(stemd.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(soop.df$Year, na.rm=TRUE), max.year=max(soop.df$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+stemd.fitted$Year <- stemd.fitted$Year - year.offset 
+stemd.fitted$pred.ecodomain.mean.log <- predict(stemd.fit, newdata=stemd.fitted,type="response", re.form=~0) 
+stemd.fitted$pred.ecodomain.mean <- exp(stemd.fitted$pred.ecodomain.mean.log)
+stemd.fitted$Year <- stemd.fitted$Year + year.offset
+#head(stemd.fitted)
+
+fitted.stemd.plot <- ggplot(data=bush.mean, aes(x=Year, y=log(Branch.Diameter..mm.)))+
+   ggtitle("Branch Diameter Measurements")+
+   ylab("log(Mean Branch Diameter (mm))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=stemd.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.stemd.plot 
+ggsave(plot=fitted.stemd.plot, 
+       file=file.path(file.prefix,'Plot-stemd-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-stemd-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-stemd-var-comp
+
+
+temp <- as.data.frame(VarCorr(stemd.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *BUSH* and *STEM* components represents the variation in intercepts among the bushes and stems 
+within the same STUDY_AREA.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-stemd-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-stemd-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(stemd.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        stemd.fit <- lmerTest::lmer(log(Branch.Diameter..mm.) ~ Year + (1|BUSHF) +(1|STEMF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(stemd.fit)["Year"]
+        slope.se        = summary(stemd.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(stemd.fit)$coefficients[row.names(summary(stemd.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")+
+   coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-stemd-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-stemd-year-effects
+
+year.eff <- ranef(stemd.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-stemd-count-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-stemd-count-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(stemd.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-stemd-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+
+```{r}
+#| echo: false
+#################################################################################
+#################################################################################
+#################################################################################
+```
+
+## Berry Count.
+
+This measurement is taken at the stem level and so there is one 
+value per stem/plant/year. 
+The same stem/plant is repeated measured over time. 
+All of the models below automatically will account for branches that are 
+removed or added as long as each stem has a unique label within a site.
+The models for the berry count are similar to those from the stem diameter 
+except that the counts may be somewhat smallish. 
+The average count is about 5 or less, then a Poisson regression can, in theory, be used. 
+However, if there are several random effects, then a Poisson mixed effects model 
+is extremely difficult to fit. 
+However, for larger counts, a linear mixed model on the log(counts+0.5) will work well 
+and avoidd many of the problems in dealing with generalized linear mixed models. 
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+soop.df$Berry.Count <- as.numeric(soop.df$Berry.Count)
+
+temp <- soop.df
+temp$STUDY_AREA_NAME <- NULL
+head(temp[,c("STUDY_AREA_NAME_shrt","ECODOMAIN","Year","BUSH","STEM","Berry.Count")])
+
+# make a bush and stem label that is unique to each study area names
+soop.df$SA.BUSH <- paste0(soop.df$STUDY_AREA_NAME, "....", soop.df$BUSH)
+soop.df$SA.STEM <- paste0(soop.df$STUDY_AREA_NAME, "....", soop.df$STEM)
+
+```
+
+Missing values are excluded.
+
+```{r}
+#| echo: false
+cat("Number of records prior to removing NA\n")
+dim(soop.df)
+bcount.df <- soop.df[ !is.na(soop.df$Berry.Count),]
+
+cat("\n\nNumber of records after to removing NA\n")
+dim(bcount.df)
+```
+
+### Preliminary plot
+
+A summary plot of the mean berry count in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-bcount-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-bcount-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+bcount.mean <- plyr::ddply(bcount.df, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   Berry.Count=mean(Berry.Count, na.rm=TRUE))
+
+prelim.bcount.plot <- ggplot(data=bcount.mean, aes(x=Year, y=log(Berry.Count)))+
+   ggtitle("Berry Count data",
+           subtitle="Each line represents one study area")+
+   ylab("log(mean Berry Count)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.bcount.plot 
+ggsave(prelim.bcount.plot, 
+       file=file.path(file.prefix,'Plot-bcount-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each BUSH and STEM is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+We add an offset of 0.5 to avoid taking logarithms of 0.
+
+The model, in a short-hand notation is:
+
+$$log(BerryCount+0.5) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{Bush(R)} +\mathit{Stem(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(BerryCount+0.05)$ is logarithm of the berry count on that bush and stem in that year. An offset of 0.5 is added to avoid
+taking logarithms of 0.
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{Stem(R)}$ represents the (random) stem effect; 
+- $\mathit{Bush(R)}$ represents the (random) bush effect; 
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The 
+The $\mathit{Stem(R)}$ and $\mathit{Bush(R)}$ terms allows for the fact that bush and stem specific conditions 
+may tend to affect the berry count consistently over time. 
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may lead to more berries in all bushes and stems).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+Some caution is needed if any of the values are 0 as log(0) is not defined. 
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset) 
+is added to all values before the analysis proceeds.
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+bcount.fit.pvalue     <- NA # in case the model does not fit
+bcount.fit.slope      <- NA
+bcount.fit.slope.se   <- NA
+bcount.fit.slope.anti <- NA
+
+# create factors
+bcount.df$ECODOMAINF       <- factor(bcount.df$ECODOMAIN)
+bcount.df$YearF            <- factor(bcount.df$Year)
+bcount.df$BUSHF            <- factor(bcount.df$SA.BUSH)
+bcount.df$STEMF            <- factor(bcount.df$SA.STEM)
+bcount.df$STUDY_AREA_NAMEF <- factor(bcount.df$STUDY_AREA_NAME)
+year.offset <- 2000
+bcount.df$Year             <- bcount.df$Year-year.offset
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+bcount.fit <- lmerTest::lmer(log(Berry.Count+.5) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|BUSHF) + (1|STEMF)+ 
+                (1|YearF:ECODOMAINF), data=bcount.df)
+
+cat("\n\n")
+anova(bcount.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(bcount.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-test-bcount-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-test-bcount-eco-slopes
+
+#temp <-anova(bcount.fit, ddf="Kenward-Roger")
+temp <-anova(bcount.fit, ddf="Satterthwaite")
+#temp
+
+bcount.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+bcount.fit.slope    <- fixef(bcount.fit)[2]
+bcount.fit.slope.se <- sqrt(diag(vcov(bcount.fit)))[2]
+
+bcount.fit.slope.anti <- exp(bcount.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-bcount-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-bcount-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(bcount.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(bcount.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-bcount-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-bcount-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(bcount.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-bcount-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in mean branch diameter."
+#| label: fig-bcount-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count), so we need to back transform
+bcount.fitted <- unique( bcount.df[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+bcount.fitted <- plyr::adply(bcount.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(soop.df$Year, na.rm=TRUE), max.year=max(soop.df$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+bcount.fitted$Year <- bcount.fitted$Year - year.offset 
+bcount.fitted$pred.ecodomain.mean.log <- predict(bcount.fit, newdata=bcount.fitted,type="response", re.form=~0) 
+bcount.fitted$pred.ecodomain.mean <- exp(bcount.fitted$pred.ecodomain.mean.log)-.5
+bcount.fitted$Year <- bcount.fitted$Year + year.offset
+#head(bcount.fitted)
+
+fitted.bcount.plot <- ggplot(data=bcount.mean, aes(x=Year, y=log(Berry.Count+0.5)))+
+   ggtitle("Berry Counts")+
+   ylab("log(Berry Count + 0.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=bcount.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.bcount.plot 
+ggsave(plot=fitted.bcount.plot, 
+       file=file.path(file.prefix,'Plot-bcount-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-bcount-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-bcount-var-comp
+
+
+temp <- as.data.frame(VarCorr(bcount.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *BUSH* and *STEM* components represents the variation in intercepts among the bushes and stems 
+within the same STUDY_AREA representing bush- and stem-specific factors that affect the berry count.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-bcount-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-bcount-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(bcount.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        bcount.fit <- lmerTest::lmer(log(Berry.Count+0.5) ~ Year + (1|BUSHF) +(1|STEMF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(bcount.fit)["Year"]
+        slope.se        = summary(bcount.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(bcount.fit)$coefficients[row.names(summary(bcount.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")+
+   coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-bcount-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-bcount-year-effects
+
+year.eff <- ranef(bcount.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))+year.offset
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-bcount-count-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-bcount-count-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(bcount.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-bcount-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+# Power/sample size analysis
+
+There are two hypotheses of most interest:
+
+- What is the mean trend over all ecoregions. This is the *Year* effect test previously seen.
+- Are there differences in the trend among ecoregions? This is the *Year:Ecoregion* test previously seen.
+
+Because the model has many random effects, the *simr* package (Green and McLeod 2016) will be used
+to estimate power at various sample sizes (number of years of monitoring). The *simr* package estimates the
+power by simulating many datasets with the same set of random effects, doing a model fit on each simulated
+dataset, and computing the proportion of the simulations where the p-value for the effect of interest is less
+than the $\alpha=0.5$ level to estimate the power to detect this effect.
+
+The berry protocol measures mean berry weight, number of berries, and mean stem diameter. The individual site analyses showed
+that berry counts are highly variable and so any power to detect trends will be small. Conversely, the
+stem diameter values have very little variation over time. Consequently, we will only do a power analysis
+on the mean berry weight response.
+
+
+## Power to detect mean trend.
+
+We will first fit a simpler model that drops the *Year:Ecoregion* term in the model and fit a model with 
+parallel slopes across the ecoregions (@fig-power-mean-trend).
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+mean.trend.fit <- bweight.fit <- lmerTest::lmer(log(Mean.Berry.Weight..gm.) ~ Year + ECODOMAINF +#  Year:ECODOMAINF + # parallel slope model
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|YearF:ECODOMAINF), data=berry.weight)
+
+
+# verify that you get the proper test
+# this is the test for a year effect
+doTest(mean.trend.fit, simr::fixed("Year", "z"))
+
+#fixef(mean.trend.fit)["Year"] <- .02
+#sim.res <- powerSim(mean.trend.fit, simr::fixed("Year", "z"), nsim=50)
+#sum.res <- summary(sim.res)
+
+# now for various power
+scenarios <- expand.grid(Year.effect=seq(0, .10, .02),   # 2%, 4%, etc trend/year
+                         #Year.effect=0.03,
+                         n.years=seq(5,15,2),            # number of years to monitor
+                         alpha=0.05
+                        )
+
+
+set.seed(23423) 
+
+#power <- plyr::adply(scenarios[seq(1,nrow(scenarios),6),],1, function(x){
+power.mean.trend <- plyr::adply(scenarios[],1, function(x,fit){
+   cat("Estimating power for ",unlist(x), "\n")
+   #print(nrow(getData(fit)))
+   fixef(fit)["Year"] <- x$Year.effect
+   new.fit <- extend(fit, along="Year", n=x$n.years)
+   #browser()
+   #print(nrow(getData(new.fit)))
+   sim.res <- powerSim(new.fit, simr::fixed("Year", "z"), nsim=50, alpha=x$alpha)
+   sum.res <- summary(sim.res)
+   sum.res
+},fit=mean.trend.fit)
+
+power.mean.trend <- plyr::rename(power.mean.trend, c("mean"="power"))
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Estimated power to detect mean trend"
+#| label: fig-power-mean-trend
+
+ggplot(data=power.mean.trend, aes(x=n.years, y=power, color=as.factor(Year.effect)))+
+   ggtitle("Estimated power to detect mean trend",subtitle=paste("Alpha :", power.mean.trend$alpha[1],"; nsims:",power.mean.trend$trials[1]))+
+   geom_point()+
+   #geom_line()+
+   #geom_smooth(se=FALSE,span=10)+
+   ggisotonic::stat_isotonic()+
+   xlab("Number of years in study")+
+   ylab("Power")+ylim(0,1)+
+   geom_hline(yintercept=0.80)+
+   scale_x_continuous(breaks=0:50)+
+   scale_color_discrete(name="Year \neffect")
+
+
+
+```
+
+The lines may appear to be "wiggly" or decline  when moving from left to right, 
+but this is an aretefact of a small number of simulations. 
+
+The *Year Effect* is the proportional change/year that is of interest. For example,
+a *Year Effect* of .02, implies a 2% change/year.
+
+A target power of .80 (when alpha=0.05) is recommended (horizontal line on plots).
+This may not be achieved for small year effects with less than 10 year of sampling.
+
+
+## Power to detect differences in trends among EcoRegions.
+
+We are now interested in the *Year:Ecoregion* term in the model and need to modify the 
+size of this interaction. We will use the current model's overall trend. Results are shown
+in @fig-power-diff-trend).
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+base.trend.fit <- lmerTest::lmer(log(Mean.Berry.Weight..gm.) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|YearF:ECODOMAINF), data=berry.weight)
+
+drop1(base.trend.fit, "Year:ECODOMAINF", test="LRT")
+
+# verify that you get the proper test
+# this is the test for a year effect
+doTest(base.trend.fit, simr::fcompare(~Year + ECODOMAINF))
+
+# now for various power
+scenarios <- expand.grid(Diff.effect=seq(0, .10, .02),   # 2%, 4%, etc differential trend/year
+                         #Diff.effect=0.03,
+                         n.years=seq(5,15,2),            # number of years to monitor
+                         alpha=0.05
+                        )
+
+
+set.seed(23534534) 
+
+#power <- plyr::adply(scenarios[seq(1,nrow(scenarios),6),],1, function(x){
+power.diff.trend <- plyr::adply(scenarios[],1, function(x,fit){
+   cat("Estimating power for ",unlist(x), "\n")
+   #browser()
+   #print(nrow(getData(fit)))
+   fixef(fit)[-(1:2)] <- rep(c(x$Diff.effect,0), length.out=(length(coef(fit))-2))
+   print(fixef(fit))
+   new.fit <- extend(fit, along="Year", n=x$n.years)
+   #browser()
+   #print(nrow(getData(new.fit)))
+   sim.res <- powerSim(new.fit, simr::fcompare(~Year + ECODOMAINF), nsim=50, alpha=x$alpha)
+   sum.res <- summary(sim.res)
+   sum.res
+},fit=base.trend.fit)
+
+power.diff.trend <- plyr::rename(power.diff.trend, c("mean"="power"))
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Estimated power to detect differential trend among EcoRegions"
+#| label: fig-power-diff-trend
+
+ggplot(data=power.diff.trend, aes(x=n.years, y=power, color=as.factor(Diff.effect)))+
+   ggtitle("Estimated power to detect differential trend",subtitle=paste("Alpha :", power.diff.trend$alpha[1],"; nsims:",power.diff.trend$trials[1]))+
+   geom_point()+
+   #geom_line()+
+   ggisotonic::stat_isotonic()+
+   xlab("Number of years in study")+
+   ylab("Power")+ylim(0,1)+
+   geom_hline(yintercept=0.80)+
+   scale_x_continuous(breaks=0:50)+
+   scale_color_discrete(name="Diff \neffect")
+
+
+
+```
+
+The lines may appear to be "wiggly" or decline  when moving from left to right, 
+but this is an aretefact of a small number of simulations. 
+
+The *Diff trend* is the DIFFERENCE in proportional change/year among the EcoRegions. For example,
+a *Diff trend* of 0 implies that all Ecoregions have the same trend. A *Diff trend* of .02, implies that the
+trends across the EcoRegions differs by 2 percentage points/year.
+
+A target power of .80 (when alpha=0.05) is recommended (horizontal line on plots).
+This may not be achieved for small differential effects with less than 10 year of sampling.
+
+
+
+
+
+
+
+# Summary
+
+This analysis examines trends across EcoDomains. The model has an overall average trend, a EcoDomain specific trend,
+and random trends for each Study Area among the EcoDomain trends. With many study areas and many years of data collected
+in each study area, the design has a high power to detect even a moderate trend over time.
+
+# References
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017).
+“lmerTest Package: Tests in Linear Mixed Effects Models.” 
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13 <https://doi.org/10.18637/jss.v082.i13>.
+
+Lenth R (2023). emmeans: Estimated Marginal Means, aka Least-Squares Means.
+R package version 1.8.4-1,
+  <https://CRAN.R-project.org/package=emmeans>.
+
+R Core Team (2032). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+

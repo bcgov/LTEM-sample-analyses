@@ -22,11 +22,16 @@
 #    Sampling involves walking a defined segment of trail and recording 
 #    squirrel rattles or chattering.
 #
-title: "`r paste0('Red Squirels - LTEM - ',params$Study.area.name)`" 
+title: "`r paste0('Red Squirels - LTEM - ',params$STUDY_AREA_NAME)`" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
 format: 
   html:
     toc: true
     number-sections: true
+    self-contained: true
   pdf:
     toc: true
     number-sections: true
@@ -35,15 +40,17 @@ format:
     number-sections: true
 
 params:
-  Study.area.name: "Bowser"
+  STUDY_AREA_NAME: "Bowser"
 ---
 
 ```{r}
 #| echo: false
 #| warning: false
 #| message: false
+#| include: false
 
 # load libraries
+library(broom.mixed)# for handling output from lmerTest
 library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
 library(flextable) # for tables that look nice
 library(ggfortify) # for residual and other diagnostic plot
@@ -53,7 +60,7 @@ library(lmtest)    # for testing for autocorrelation
 library(lubridate) # date conversions
 library(plyr)      # for group processing
 library(readxl)    # for opening the Excel spreadsheets and reading off them
-library(reshape2)  # for melting and casting
+library(sf)
 library(lmerTest)  # for the linear mixed modelling
 library(stringr)   # string handling (like case conversion)
 
@@ -96,11 +103,9 @@ transect 4 on 2013-09-13.
 Does this mean that the transect was not run, or was it run and no squirrels were detected? 
 The Transect Information sheet in the workbook has the GPS co-ordinates of each transect, 
 but does not indicate if the transect was run on each of the days. 
-It will be assume that ALL transects listed on the Transect Information worksheet 
-are run on every date listed in the General Survey worksheet and 
-if no information is present in the General Survey worksheet, then a 0 is imputed.
 
-If would be preferable to create another worksheet indicating which transects were run on each sampling date.
+It will be assume that ALL transects listed in the database were run and
+have 0 already imputed.
 
 
 ### No information on transect length available
@@ -145,34 +150,22 @@ or all take the same visit indicator.
 
 ## Database structure
 
-The database for this protocol is a series of Excel workbooks 
-with multiple sheets in each workbook. 
-The *Transect Information* sheet contains the information on the transects 
-available for this year. It is implicitly assumed that every 
-transect is visited on every date. 
-The *General Survey* sheet contains the information collected. There are multiple lines per transect.
+The relevant fields extracted from the database are:
 
-The relevant fields on the *Transect Information* worksheet are:
-
--	Transect Label.
-
-The relevant fields on the *General Survey* worksheet are:
-
--	Transect Label.
--	Date. The date the data was collected. The Year is extracted from this date.
--	Detect Type. What type of detection was made. 
-Only calls are of interest. 
-A value of zeros will be imputed for the total number of calls heard on the transect 
-if there is no information on a transect on a particular date.
+-	*Transect Label*.
+-	*Date*. The date the data was collected. The Year is extracted from this date.
+-	*Count*. The number of calls heard on the transect on that date.
+It is assumed that 0's have been already imputed on the database.
 
 
 # Reading and checking the data
 
-The database was read for all record pertaining to the
-`r params$Study.area.name`. The following files were found:
+The database was queried for all observations from
+`r params$STUDY_AREA_NAME`.
 
 ```{r}
 #| echo: false
+#| include: false
 
 # get the data from the Excel work.books.
 # we put the list of work books here, including the file type (xls or xlsx).
@@ -180,30 +173,33 @@ The database was read for all record pertaining to the
 
 # Get the data base information and any corrections here
 data.extract <- read.LTEM.data(study.type="Squirrels",
-                                         site.names=params$Study.area.name, 
-                                         sheets=c("General Survey","Transect Information"))
+                                         site.names=params$STUDY_AREA_NAME)
+```
 
-if(length(data.extract$extracted.sheets)==0){
+
+```{r}
+#| echo: false
+if(nrow(data.extract$user.data)==0){
     # no data extracted
-    cat("\n\n\n*** ERROR *** No data extracted. Check your Study.area.name in the yaml \n")
+    cat("\n\n\n*** ERROR *** No data extracted. Check your STUDY_AREA_NAME in the yaml \n")
     knitr::knit_exit()
-    stop()
+    #stop()
 }
 
 ```
 
-These workbooks were read using *R*:
+The following surveys were found:
+
+```{r}
+#| echo: false
+cat("Surveys with the data \n")
+data.extract$projects[,c("SPI_PROJECT_ID","SURVEY_ID","START_DATE","STUDY_AREA_NAME")]
+```
 
 ```{r}
 #| echo: false
 
-cat("File names with the data \n")
-data.extract$files
-
-# paste all of the transect information together and paste all of the general survey information together
-transect.df <- data.extract$extracted.sheets$"Transect Information"
-squirrel.df <- data.extract$extracted.sheets$"General Survey"
-
+squirrel.df <- data.extract$user.data
 ```
 
 The following data editing was performed
@@ -228,41 +224,17 @@ names(squirrel.df) <- make.names(names(squirrel.df))
 cat("\nCorrected variable names of data frame\n")
 names(squirrel.df)
 
-
-cat("\nOriginal variable names in transects data frame\n")
-names(transect.df)
-
-names(transect.df) <- make.names(names(transect.df))
-
-cat("\nCorrected variable names of transect data frame\n")
-names(transect.df)
-
 ```
 
-## Dates converted to standardized form
+## How many years of data are available?
 
 ```{r}
 #| echo: false
 #| error: true
 #| 
-# Check the dates and year codes to R date format
-# Notice that we already converted to R date format for the squirrel.df when we read in the data
-squirrel.df$Date.new<- as.Date(squirrel.df$Date)
 
-select <- is.na(squirrel.df$Date.new)
-if(any(select)){
-   cat("*** ERROR *** Some dates appear to be invalid \n")
-   waterfowl.df[select, c("Study.area.name","Sample.station.label","Date","Date.new")]
-   knitr::knitr_exit()
-   stop()
-}
-
-squirrel.df$Date <- squirrel.df$Date.new
-
-squirrel.df$Year <- lubridate::year(squirrel.df$Date)
-
-cat("\n\nThe number of records by year are \n")
-xtabs(~Study.area.name+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+cat("\n\nThe number of TRANSECTS run by year are \n")
+xtabs(~STUDY_AREA_NAME+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
 
 if(length(unique(squirrel.df$Year))<3){
     # insufficient data extracted
@@ -270,173 +242,75 @@ if(length(unique(squirrel.df$Year))<3){
     knitr::knit_exit()
     stop()
 }
-select <- is.na(squirrel.df$Date)
-if(any(select)){
-   cat("*** ERROR *** Some dates appear to be invalid in the squirrel worksheet \n")
-   squirrel.df[select, c("Study.area.name","Sample.Station.Label","Date")]
-   knitr::knit_exit()
-   stop()
-}
-
-# notice that for squirrels, the year is not stored in the Transect Information sheet and
-# needs to be extracted from the workbook name
-year.start <- 4+regexpr("dct_",transect.df$workbook, fixed=TRUE)
-transect.df$Year <- as.numeric(substr(transect.df$workbook,year.start, year.start+3)) 
-
-
-cat("\n\nThe number of records by year in the Transect Information sheets are \n")
-xtabs(~Study.area.name+Year, data=transect.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
 ```
 
 ## Checking Study Area Name
 
 The Study Area Name should be recorded consistently across years, otherwise 
-it may indicate that different sites are being studies. The study area name
+it may indicate that different sites are being studied. The study area name
 is converted to Title Case.
 
-The list of Study Area Names by year in the data is:
+The list of number of transects by each combination of Study Area Names by year in the data is:
 
 ```{r}
 #| echo=FALSE
 
 # Check that the Study Area Name is the same across all years
 # Look at the output from the xtabs() to see if there are multiple spellings 
-# of the same Study.area.name.
+# of the same STUDY_AREA_NAME.
 
-# We will convert the Study.area.name to Proper Case.
-squirrel.df$Study.area.name <- stringr::str_to_title(squirrel.df$Study.area.name)
-xtabs(~Study.area.name+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)
+# We will convert the STUDY_AREA_NAME to Proper Case.
+squirrel.df$STUDY_AREA_NAME <- stringr::str_to_title(squirrel.df$STUDY_AREA_NAME)
+xtabs(~STUDY_AREA_NAME+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)
 
-# We will convert the Study.area.name to Proper Case.
-transect.df$Study.area.name <- stringr::str_to_title(transect.df$Study.area.name)
-xtabs(~Study.area.name+Year, data=transect.df, exclude=NULL, na.action=na.pass)
-
-if(!all(grepl(params$Study.area.name, squirrel.df$Study.area.name, ignore.case=TRUE))){
-  cat("*** ERROR *** Study.area.names are not consistent in calls sheet\n")
-  cat("A tabulation of Study.area.names in datasets is \n")
-  xtabs(~Study.area.name, data=squirrel.df, exclude=NULL, na.action=na.pass)
-  cat("Requested study area was ", params$Study.area.name,  "\n")
+if(!all(grepl(params$STUDY_AREA_NAME, squirrel.df$STUDY_AREA_NAME, ignore.case=TRUE))){
+  cat("*** ERROR *** STUDY_AREA_NAMEs are not consistent in calls sheet\n")
+  cat("A tabulation of STUDY_AREA_NAMEs in datasets is \n")
+  xtabs(~STUDY_AREA_NAME, data=squirrel.df, exclude=NULL, na.action=na.pass)
+  cat("Requested study area was ", params$STUDY_AREA_NAME,  "\n")
   stop()
 }
 
-if(!all(grepl(params$Study.area.name, transect.df$Study.area.name, ignore.case=TRUE))){
-  cat("*** ERROR *** Study.area.names are not consistent in transect sheets\n")
-  cat("A tabulation of Study.area.names in datasets is \n")
-  xtabs(~Study.area.name, data=transect.df, exclude=NULL, na.action=na.pass)
-  cat("Requested study area was ", params$Study.area.name,  "\n")
-  stop()
-}
-
-if(length(unique(squirrel.df$Study.area.name))>1){
+if(length(unique(squirrel.df$STUDY_AREA_NAME))>1){
    cat("*** ERROR *** More than one study area found in call sheet\n")
    cat("\n\nThe number of records by year are \n")
-   xtabs(~Study.area.name+Year, data=squirell.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   xtabs(~STUDY_AREA_NAME+Year, data=squirell.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
    stop()
 }
 
-if(length(unique(transect.df$Study.area.name))>1){
-   cat("*** ERROR *** More than one study area found transect sheets \n")
-   cat("\n\nThe number of records by year are \n")
-   xtabs(~Study.area.name+Year, data=transect.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
-   stop()
-}
 
 ```
 
 
 ## Checking species code
 
-The species code should be the same across the files.
+The species code should be the same across for all data values..
 Note that in many years, a code of *NULL* was entered to indicate no squirrels of any species
-were detected.
+were detected. **This table shows the total detections for each species.year combination over all the transects**
 
 ```{r}
 #| echo: false
 # Check the Species code to make sure that all the same
 # This isn't used anywhere in the analysis but is useful to know
-xtabs(~Species+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)
+xtabs(COUNT~SPECIES_CODE+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)
 
-if(length(unique(squirrel.df$Species))>1){
-   cat("*** WARNING *** More than one species name found \n")
-   cat("\n\nThe number of records by species and year are \n")
-   xtabs(~Species+Year, data=squirrel.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+if(length(unique(squirrel.df$SPECIES_CODE))>1){
+   cat("*** WARNING *** More than one species name found - OK if some are NULL \n")
    #stop()
 }
 
 ```
 
-<!-- ## Call type - NOW APPEARS TO BE ONLY AUDIBLE-->
 
-<!-- We will only use the detecton type is *CA* (calls). -->
+## Summarized data to the Year.Transect level
 
-<!-- ```{r} -->
-<!-- #| echo: false -->
-
-<!-- squirrel.df$Detect.Type <- toupper(squirrel.df$Detect.Type) -->
-
-<!-- # Check the Detection type. We are only interested in CA (calls) - check for upper case everywhere -->
-<!-- xtabs(~Detect.Type+Year, data=squirrel.df, exclude=NULL, na.action=na.pass) -->
-<!-- squirrel.df <- squirrel.df[ squirrel.df$Detect.Type == "CA",]  # select only calls -->
-<!-- xtabs(~Detect.Type+Year, data=squirrel.df, exclude=NULL, na.action=na.pass) -->
-
-<!-- ``` -->
-
-## Summarized data to the Year.Date.Transect level
-
-We need to first summarize the data to the Year.Date.Transect level
-and impute 0's for transects that were run, but no calls were recorded.
-
-```{r}
-#| echo: false
-
-# Summarize the total number of calls to the Year-Date-Transect level
-count.transect <- plyr::ddply(squirrel.df, c("Study.area.name","Year","Date","Transect.label"), 
-                              plyr::summarize, n.calls=length(Date))
-xtabs(~n.calls+Year, data=count.transect)  # Notice that no 0's are present
-
-
-# Impute 0 values. Create a list of all transect x dates for each year of the study
-unique.transect <- unique(transect.df[,c("Study.area.name","Year","Transect.label")])
-unique.date     <- unique(squirrel.df[,c("Study.area.name","Year","Date")])
-
-# create the combination of transects and dates for Study-area year combination
-transect.date.set <- plyr::ddply(unique.transect, c("Study.area.name","Year"), function(x, unique.date){
-    # Extract the dates for this study area - year combination
-    dates <- unique.date[ x$Study.area.name[1] == unique.date$Study.area.name & 
-                          x$Year[1]            == unique.date$Year, "Date" ]
-    transect.date <- expand.grid(Transect.label=x$Transect.label,
-                                 Date          =dates, stringsAsFactors=FALSE)
-    transect.date$Study.area.name <- x$Study.area.name[1]
-    transect.date
-}, unique.date=unique.date)
-head(transect.date.set)
-
-# match up the expanded set with the actual data. Missing values will be generate which will
-# be converted to zero
-dim(count.transect)
-count.transect <- merge(count.transect, transect.date.set, all=TRUE)
-dim(count.transect)
-
-# which date/transect combinations were missing
-cat("Missing transect data on the following date --- check your data\n")
-count.transect[ is.na(count.transect$n.calls),]
-
-# Impute a value of 0 for the total calls
-count.transect$n.calls[ is.na(count.transect$n.calls)] <- 0
-count.transect[ is.na(count.transect$n.calls),]
-
-# finally summary table
-xtabs(n.calls~Transect.label+Date+Study.area.name, data=count.transect, exclude=NULL, na.action=na.pass)
-xtabs(~Transect.label+Date+Study.area.name, data=count.transect, exclude=NULL, na.action=na.pass)
-```
-
-Following this, we summarize the data (with imputed 0's) to mean number of calls per year per transect.
+We summarize the data to mean number of calls per year per transect.
 
 ```{r}
 #| echo: false
 # Summarize the imputed data to one number per year per transect
-count.transect <- plyr::ddply(count.transect, c("Study.area.name","Year","Transect.label"), 
-                              plyr::summarize, n.calls=mean(n.calls))
+count.transect <- plyr::ddply(squirrel.df, c("STUDY_AREA_NAME","Year","TRANSECT"), 
+                              plyr::summarize, mean.calls=mean(COUNT))
 count.transect
 
 ```
@@ -446,21 +320,19 @@ count.transect
 #| echo: false
 
 # Get the file prefix
-file.prefix <- make.names(squirrel.df$Study.area.name[1])
+file.prefix <- make.names(squirrel.df$STUDY_AREA_NAME[1])
 file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert . to 
-if(!dir.exists("PLots"))dir.create("Plots")
+if(!dir.exists("Plots"))dir.create("Plots")
 file.prefix <- file.path("Plots", file.prefix)
 ```
 
 
 # Single Site Analysis
 
-Date for the `r params$Study.area.name` are available from `r min(squirrel.df$Year, na.rm=TRUE)` to 
+Date for the `r params$STUDY_AREA_NAME` are available from `r min(squirrel.df$Year, na.rm=TRUE)` to 
 `r max(squirrel.df$Year, na.rm=TRUE)`. 
 
-This design has multiple transects that are repeatedly measured over time 
-with multiple plots measured on each transect that are also repeatedly 
-measured over time. 
+This design has multiple transects that are repeatedly measured over time. 
 Please refer to the Fitting Trends with Complex Study Designs document in the 
 CommonFile directory for information on fitting trends with complex study designs. 
 
@@ -483,18 +355,18 @@ A summary plot of the mean number of calls on each transect is shown in @fig-cal
 
 ```{r}
 #| echo: false
-#| fig-cap: "Summary plot of the data. Because the typical counts are small, the data is analyzed on the logarithmic scale."
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
 #| label: fig-call-prelim
 #| warning: false
 #| message: false
 
-prelim.plot <- ggplot(data=count.transect, aes(x=Year, y=log(n.calls+.5), color=Transect.label, shape=Transect.label))+
+prelim.plot <- ggplot(data=count.transect, aes(x=Year, y=log(mean.calls+.5), color=TRANSECT, shape=TRANSECT))+
    ggtitle("Squirrel count data")+
    ylab("log(Mean count+.5)")+
    geom_point(position=position_dodge(width=.1))+
    geom_line( position=position_dodge(width=.1))+
-   facet_wrap(~Study.area.name, ncol=1)+
-   scale_x_continuous(breaks=min(count.transect$Year,na.rm=TRUE):max(count.transect$Year,na.rm=TRUE))
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)+
+   scale_x_continuous(breaks=integer_breaks())
 prelim.plot 
 ggsave(plot=prelim.plot, 
        file=paste(file.prefix,'-plot-prelim.png', sep=""),
@@ -503,26 +375,26 @@ ggsave(plot=prelim.plot,
 ```
 
 
-There is evidence of a transect effect, where, for example, 
-the number of calls at certain transects is generally higher than at the 
+There may be evidence of a transect effect, where, for example, 
+the number of calls at certain transects could generally be higher than at the 
 other transects because of local transect-specific conditions (e.g. better habitat).
 
 Because this is count data,  a linear mixed model is fit to the logarithm of the mean calls per transect.
 The model is:
 
-$$log(AvgCalls+.5) \sim Year + TransectF(R) + YearF(R)$$
+$$log(AvgCalls+.5) \sim \mathit{Year} + \mathit{TransectF(R)} + \mathit{YearF(R)}$$
 where 
 
 - $log(AvgCalls)$ is logarithm of the average number of calls for that transect in that year. An offset of 0.5
 is used to avoid taking the logarithm of 0.
-- $TransectF(R)$ represents the (random)transect effect; 
-- $YearF(R)$ represents the (random) year-specific effects (process error), and 
-- $Year$ represents the calendar year trend over time. 
+- $\mathit{TransectF(R)}$ represents the (random)transect effect; 
+- $\mathit{YearF(R)}$ represents the (random) year-specific effects (process error), and 
+- $\mathit{Year}$ term represents the calendar year trend over time. 
 
-The $TransectF$ term allows for the fact that transect-specific conditions 
+The $\mathit{TransectF}$ term allows for the fact that transect-specific conditions 
 may tend to affect the counts on this transect consistently over time. 
-The $YearF$ term represent the year-specific effects (process error) 
-caused by environmental factors (e.g., a warmer than normal year may elict more calls from squirrels).
+The $\mathit{YearF}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may elicit more calls from squirrels).
 
 Model fit on the logarithmic scale assume that effects are multiplicative over time, 
 so that the when the actual fit is done on the logarithmic scale, 
@@ -538,13 +410,19 @@ The model was fit using the *lmer()* function in *R*.
 #| echo: false
 #| 
 
-count.transect$YearF           <- factor(count.transect$Year)
-count.transect$Transect.labelF <- factor(count.transect$Transect.label)
-count.fit <- lmerTest::lmer(log(n.calls+.5) ~ Year + (1|Transect.labelF) + (1|YearF), data=count.transect)
+count.fit.pvalue     <- NA # in case the model does not fit
+count.fit.slope      <- NA
+count.fit.slope.se   <- NA
+count.fit.slope.anti <- NA
 
-#anova(count.fit, ddf="Kenward-Roger")
-#summary(count.fit)
-#VarCorr(count.fit)
+count.transect$YearF     <- factor(count.transect$Year)
+count.transect$TRANSECTF <- factor(count.transect$TRANSECT)
+count.fit <- lmerTest::lmer(log(mean.calls+.5) ~ Year + (1|TRANSECTF) + (1|YearF), data=count.transect)
+
+cat("\n\n")
+anova(count.fit, ddf="Kenward-Roger")
+cat("\n\n")
+summary(count.fit)
 
 count.fit.pvalue <- anova(count.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
 count.fit.slope  <- fixef(count.fit)[2]
@@ -558,13 +436,15 @@ count.fit.slope.anti <- exp(count.fit.slope)
 and the p-value of the hypothesis of no trend. With 
 `r length(unique(squirrel.df$Year))` years of data, 
 the estimated slope on the logarithmic scale is 
-`r round(count.fit.slope,3)` 
-(SE `r round(count.fit.slope.se,3)`) calls/year 
-(`r insight::format_p(count.fit.pvalue)`).
+`r try(round(count.fit.slope,3), silent=TRUE)` 
+(SE `r try(round(count.fit.slope.se,3), silent=TRUE)`) calls/year 
+(`r try(insight::format_p(count.fit.pvalue), silent=TRUE)`).
 
-This corresponds to an approximate exp(`r round(count.fit.slope,3)`)=`r round(count.fit.slope.anti,2)`x
+This corresponds to an approximate exp(`r try(round(count.fit.slope,3), silent=TRUE)`)=
+`r try(round(count.fit.slope.anti,2), silent=TRUE)`x
 multiplicative change/year, 
-i.e. the mean count in year $t=1$ is about `r round(count.fit.slope.anti,2)`x the mean count in 
+i.e. the mean count in year $t+1$ is about `r try(round(count.fit.slope.anti,2), silent=TRUE)`x 
+the mean count in 
 year $t$.
 Because the analysis is done on the logarithmic scale, the fitted trend line looks non-linear 
 on the original (non-transformed) scale.
@@ -578,7 +458,7 @@ on the original (non-transformed) scale.
 
 # extract a table of the slopes
 count.slopes <- data.frame(
-       Study.area.name = count.transect$Study.area.name[1],
+       STUDY_AREA_NAME = count.transect$STUDY_AREA_NAME[1],
        slope           = fixef(count.fit)["Year"],
        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"],
        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"], 
@@ -590,7 +470,7 @@ count.slopes <- data.frame(
 # compute the fitted values from the model
 # The model was run on the log(average count), so we need to back transform
 count.fitted <- data.frame(
-                 Study.area.name=count.transect$Study.area.name[1],
+                 STUDY_AREA_NAME=count.transect$STUDY_AREA_NAME[1],
                  Year=seq(min(count.transect$Year, na.rm=TRUE),max(count.transect$Year, na.rm=TRUE), .1),
                  stringsAsFactors=FALSE)
 count.fitted$pred.mean <- exp(predict(count.fit, newdata=count.fitted,type="response", re.form=~0))-.5 # remove the offset
@@ -599,14 +479,14 @@ count.fitted$pred.mean <- exp(predict(count.fit, newdata=count.fitted,type="resp
 
 # Make the summary plot with the estimated slope and fitted line
 count.plot.summary <- ggplot2::ggplot(data=count.transect,
-                                    aes(x=Year, y=n.calls))+
+                                    aes(x=Year, y=mean.calls))+
    ggtitle("Squirrel count ")+
    ylab("Squirrel Count")+
-   geom_point(size=3, aes(color=Transect.label))+
+   geom_point(size=3, aes(color=TRANSECT))+
    geom_line(data=count.fitted, aes(y=pred.mean))+
-   facet_wrap(~Study.area.name, ncol=1, scales="free" )+
-   scale_x_continuous(breaks=min(count.transect$Year,na.rm=TRUE):max(count.transect$Year,na.rm=TRUE))+
-   geom_text(data=count.slopes, aes(x=min(count.transect$Year, na.rm=TRUE), y=max(count.transect$n.calls, na.rm=TRUE)), 
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_text(data=count.slopes, aes(x=min(count.transect$Year, na.rm=TRUE), y=max(count.transect$mean.calls, na.rm=TRUE)), 
              label=paste("Slope (on log scale) : ",round(count.slopes$slope,2), 
                          " ( SE "  ,round(count.slopes$slope.se,2),")",
                          " p :"    ,round(count.slopes$p.value,3)),
@@ -643,7 +523,7 @@ the fitted values. A good plot will show a random scatter around 0.
 Any large deviations from 0 should be investigated as potential outliers. 
 In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
 Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
-Caterpiller plots attempt to show the distribution of the random effects. 
+Caterpillar plots attempt to show the distribution of the random effects. 
 The bottom left plot shows the distribution of the transect effects. 
 The bottom right plot shows the distribution of the year-specific effects (process variation). 
 In this case, the estimated process variation is very small with most of points very close to 0.
@@ -660,7 +540,8 @@ If there is only a small number of years of data available, this may not sensibl
 #| message: false
 
 # get the autocorrelation 
-count.transect$resid <- log(count.transect$n.calls) - predict(count.fit, newdata=count.transect, re.form=~0)
+count.transect$resid <- log(count.transect$mean.calls+.5) - 
+                        predict(count.fit, newdata=count.transect, re.form=~0)
 mean.resid <- plyr::ddply(count.transect, "Year", summarize, mean.resid=mean(resid))
 resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
 count.dwres1 <- car::durbinWatsonTest(resid.fit)
@@ -673,8 +554,9 @@ count.dwres2 <- lmtest::dwtest(resid.fit)
 Whenever an analysis of a trend over time is conducted, the analysis 
 should test and adjust for autocorrelation. 
 Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
-The test for autocorrelation commonly used is the Durbin-Watson test and we find
-`r insight::format_p(count.dwres1$p)` for the test of no autocorrelation.
+The test for autocorrelation commonly used is the Durbin-Watson test and the p-value is 
+`r try(insight::format_p(count.dwres1$p), silent=TRUE)` 
+for the test of no autocorrelation.
 
 This model used the approximate analysis on the logarithm of the average counts per transect. 
 It is possible to analyze the actual raw counts using a generalized linear mixed model – 
@@ -682,7 +564,129 @@ this was not done in this example because of the extreme smallness of the datase
 Once many more years are collected, this may be an alternative analysis 
 that will more naturally deal with 0 counts without having to add a small constant.
 
+
+
+
+# Power analysis
+
+A power/sample size analysis was conducted to determine the number of years of sampling needed to detect
+changes over time. The steps in the power/sample size analysis are:
+
+- Compute a single number summarizing the response at this site in each year. The mean number of calls is currently recorded by transect and the average
+over the transects will be computed.
+- Analyze the log(mean response) using a simple linear regression. This will give an estimate of the combined year-specific and sampling variation
+around regression line (overall sd).
+- Use the overall SD to estimate power and sample size requirements.
+
+Here are the overall means for each year for each response:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+
+# get the mean values of 1 number per site per year
+
+count.mean1 <- plyr::ddply(count.transect, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.calls=mean(mean.calls, na.rm=TRUE))
+count.mean1$Mean.response <- count.mean1$mean.calls
+count.mean1$Response      <- "Calls/transect"
+
+all.resp <- plyr::rbind.fill(count.mean1)
+all.resp
+
+```
+
+The above data needs to be checked if there are any suspicious values.  
+
+We use the *lm()* function to fit linear regression over time on the log(scale) and obtain the combined year-specific effect (process error) 
+plus sampling variation standard deviation (@tbl-resid-sd).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| tbl-cap: "Estimated residual (process + sampling) standard deviation"
+#| label: tbl-resid-sd
+
+# if any of the values are zero, add a small offset
+all.resp <- plyr::ddply(all.resp, "Response", function(x){
+     offset <- min(x$Mean.response[x$Mean.response>0]) *.5
+     x$Mean.response <- x$Mean.response + offset
+     x
+})
+
+# fit a regression line on the log(scale) and get the residual sd
+residual.sd <- plyr::ddply(all.resp, "Response", function(x){
+    fit <- lm(log(Mean.response) ~ Year, data=x)
+    sd  <- summary(fit)$sigma
+    data.frame(sd=sd)
+})
+
+ft <- flextable(residual.sd)
+ft <- width(ft, j=1, width=2)
+ft <- width(ft, j=2, width=2)
+ft <- colformat_double(ft, j=2, digits=4)
+ft <- set_header_labels(ft, values = list(sd="Process + sampling SD"))
+ 
+ft
+```
+
+This is then used to estimate the power to detect various proportional changes over time (@fig-power).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| fig-cap: "Estimated power to detect proportional changes over time"
+#| label: fig-power
+
+# remove any missing values for resid.sd
+residual.sd <- residual.sd[!is.na(residual.sd$sd),]
+
+# estimate power at changes of 0 to .10/year with sample sizes of 5 to 20 years for each response
+scenarios <- expand.grid(n.years=seq(5,20,1),
+                         slope  =seq(0, .1, .02))
+power.detect <- plyr::ddply(residual.sd, "Response", function(x, scenarios){
+   
+   power <- plyr::adply(scenarios,1, function(scenario,x){
+      #browser()
+      power <- slr.power.stroup(Trend=scenario$slope,
+                                Xvalues=1:scenario$n.years,
+                                Process.SD=x$sd,
+                                Sampling.SD=0)
+      power
+   },x=x)
+}, scenarios=scenarios)
+
+ggplot(data=power.detect, aes(x=n.years, y=power.2s, color=as.factor(slope)))+
+   ggtitle("Estimated power", subtitle="alpha=0.05")+
+   geom_point()+
+   geom_line()+
+   facet_wrap(~Response, ncol=1)+
+   ylab("Power")+xlab("Number of years in the study")+
+   scale_color_discrete(name="Proportional\nyearly\nslope")+
+   xlim(0,NA)+ylim(0,1)+
+   geom_hline(yintercept=0.8)
+
+
+```
+ 
+The proportional yearly slope indicates the effect size of interest. For example, a value
+of .02 would indicated a 2% change/year in the mean response.
+ 
+In cases of high variability, the power is uniformly low 
+to detect the yearly proportion change over time. 
+In cases of low variability power is uniformly very high
+to detect the yearly proportion change over time.
+
+
+
 # Summary
+
 Some caution is required to ensure that all transects are 
 run the same number of times in a year. In this balanced design, 
 it is straightforward to simply sum over all measurements of transect 
@@ -697,11 +701,11 @@ but better methods are available.
 #| echo: false
 #| eval: false
 #| include: false
-##### if the lmer() function does not counverge, you can repeat the analysis on the average of all the transect
+##### if the lmer() function does not converge, you can repeat the analysis on the average of all the transect
 
 # Compute the average total count for each transect so I can plot these over time
-count.avg <- plyr::ddply(count.transect, c("Study.area.name","Year"), plyr::summarize,
-                          count=mean(n.calls, na.rm=TRUE))
+count.avg <- plyr::ddply(count.transect, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                          count=mean(mean.calls, na.rm=TRUE))
 count.avg
 
 # Make a preliminary plot of average count by years
@@ -711,8 +715,8 @@ prelim.count.plot.avg <- ggplot(data=count.avg, aes(x=Year, y=log(count)))+
    ylab("log(Mean count) on the plots")+
    geom_point(position=position_dodge(width=.2))+
    geom_smooth(method="lm", se=FALSE)+
-   scale_x_continuous(breaks=min(count.avg$Year, na.rm=TRUE):max(count.avg$Year, na.rm=TRUE))+
-   facet_wrap(~Study.area.name, ncol=1)
+   scale_x_continuous(breaks=integer_breaks())+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)
 prelim.count.plot.avg 
 ggsave(plot=prelim.count.plot.avg, 
        file=paste(file.prefix,'-count-plot-prelim-avg.png',sep=""),
@@ -744,7 +748,7 @@ dwres2
 
 # extract the slope
 count.slopes.avg <- data.frame(
-       Study.area.name =count.transect$Study.area.name[1],
+       STUDY_AREA_NAME =count.transect$STUDY_AREA_NAME[1],
        slope           = coef(count.fit.avg)["Year"],
        slope.se        = summary(count.fit.avg)$coefficients["Year","Pr(>|t|)"],
        p.value         = summary(count.fit.avg)$coefficients[row.names(summary(count.fit.avg)$coefficients)=="Year"  ,"Pr(>|t|)"], 
@@ -755,7 +759,7 @@ count.slopes.avg
 
 # compute the fitted values from the model
 count.fitted.avg <- data.frame(
-                 Study.area.name=count.transect$Study.area.name[1],
+                 STUDY_AREA_NAME=count.transect$STUDY_AREA_NAME[1],
                  Year=seq(min(count.avg$Year, na.rm=TRUE),max(count.avg$Year, na.rm=TRUE), .1),
                  stringsAsFactors=FALSE)
 # because we fit on the log-scale, we need to antilog the predictions
@@ -769,8 +773,8 @@ count.plot.summary.avg <- ggplot2::ggplot(data=count.avg,
    ylab("Mean Total % count")+
    geom_point(size=3,position=position_dodge(w=0.2))+
    geom_line(data=count.fitted.avg, aes(x=Year,y=pred.mean))+
-   facet_wrap(~Study.area.name, ncol=1, scales="free" )+
-   scale_x_continuous(breaks=min(count.avg$Year, na.rm=TRUE):max(count.avg$Year,na.rm=TRUE))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=integer_breaks())+
    geom_text(data=count.slopes.avg, aes(x=min(count.avg$Year, na.rm=TRUE), y=max(count.avg$count, na.rm=TRUE)), 
              label=paste("Slope : ",round(count.slopes.avg$slope,2), 
                          " ( SE "  ,round(count.slopes.avg$slope.se,2),")",

@@ -21,12 +21,16 @@
 #    Choose a date after which migrants are mostly gone. 
 #    Count on 3 separate occasions during a 2-3 week period and keep highest count.
 
-title: "`r paste0('Waterfowl - LTEM - ',params$Study.area.name)`" 
-date: '`r format(Sys.time(), "%Y-%m-%d")`'
+title: "`r paste0('Waterfowl - LTEM - ',params$STUDY_AREA_NAME)`" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
 format: 
   html:
     toc: true
     number-sections: true
+    self-contained: true
   pdf:
     toc: true
     number-sections: true
@@ -35,14 +39,15 @@ format:
     number-sections: true
 
 params:
-  Study.area.name: "Yellow Point"
-
+   STUDY_AREA_NAME: "Yellow Point"
+#  STUDY_AREA_NAME: "Alice Lake Provincial Park"
 ---
 
 ```{r}
 #| echo: false
 #| warning: false
 #| message: false
+#| include: false
 
 # load libraries
 library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
@@ -54,7 +59,6 @@ library(lmtest)    # for testing for autocorrelation
 library(lubridate) # date conversions
 library(plyr)      # for group processing
 library(readxl)    # for opening the Excel spreadsheets and reading off them
-library(reshape2)  # for melting and casting
 library(lmerTest)  # for the linear mixed modelling
 library(stringr)   # string handling (like case conversion)
 
@@ -89,13 +93,7 @@ If no species were seen during a visit, this is indicated by
 the species code being set to missing and the count field being set to 0. 
 This needs to be done consistently over time.
 
-If no visit was made to a station, then there are no records in the *General Survey* worksheet. 
-One must infer that if there are no records for a station at a date, 
-that it was not visited. 
-The *Sample Station Information* worksheet only has information on the station label 
-and not when they were visited. 
-It is preferable to include in this sheet the visit dates of each station 
-in that year explicitly rather than trying to infer this information from the *General Survey* worksheet.
+If no visit was made to a station in a year, then there are no records in the database. 
 
 ### Classifying by season 
 
@@ -113,16 +111,9 @@ to avoid this problem
 
 ## Database structure
 
-The database for this protocol is a series of Excel workbooks with multiple sheets in each workbook. 
-The *Sample Station Information* sheet contains the information on the stations available for this year. 
-If a station is not visited, this is indicated by a missing record in the *General Survey* worksheet. 
-The *General Survey* sheet contains the information collected. 
-There are multiple lines per visit. 
-If a visit was done but no birds were seen, then the species code is set to missing with a count of 0.
+The relevant fields from the database are:
 
-The relevant fields on the *General Survey* worksheet are:
-
--	*Sample Location Label*.  **Appears to be changed to Transect Label starting in 2019.
+-	*SAMPLE_LABEL*. The label for the location where data was located.
 -	*Date*. The date the data was collected. The *Year* is extracted from this date.
 -	*Species*. What species were seen
 -	*Count*. Count of the number of birds of each species.
@@ -133,44 +124,36 @@ The relevant fields on the *General Survey* worksheet are:
 ```{r}
 #| echo: false
 #| error: true
+#| include: false
+
+
 # Get the data base information and any corrections here
-waterfowl.extract <- read.LTEM.data(study.type="Waterfowl",
-                                         site.names=params$Study.area.name, sheets="General Survey")
+data.extract <- read.LTEM.data(study.type="Waterfowl",
+                                         site.names=params$STUDY_AREA_NAME)
+```
 
-if(length(waterfowl.extract$extracted.sheets)==0){
+```{r}
+#| echo: false
+if(nrow(data.extract$user.data)==0){
     # no data extracted
-    cat("\n\n\n*** ERROR *** No data extracted. Check your Study.Area.Name in the yaml \n")
+    cat("\n\n\n*** ERROR *** No data extracted. Check your STUDY_AREA_NAME in the yaml \n")
     knitr::knit_exit()
-    stop()
+    #stop()
 }
-
-
 ```
 
-The database was read for all record pertaining to the
-`r params$Study.area.name`. The following files were found for this site:
+The following surveys were found:
 
 ```{r}
 #| echo: false
-#| 
-cat("File names with the data \n")
-waterfowl.extract$files
+cat("Surveys with the data \n")
+data.extract$projects[,c("SPI_PROJECT_ID","SURVEY_ID","START_DATE","STUDY_AREA_NAME")]
 ```
+
 
 ```{r}
 #| echo: false
-waterfowl.df <- waterfowl.extract$extracted.sheets$"General Survey"
-```
-
-Notice we needed to fix the *Sample Station Label*.
-
-
-```{r}
-#| echo: true
-# Notice that Sample.station.label was changed to Transect.Label starting in 2018?
-select <- is.na(waterfowl.df$"Sample Station Label")
-waterfowl.df$"Sample Station Label"[select] <- waterfowl.df$"Transect Label"[select]
-
+waterfowl.df <- data.extract$user.data
 ```
 
 
@@ -198,34 +181,20 @@ cat("\nCorrected variable names of data frame\n")
 names(waterfowl.df)
 ```
 
-## Dates converted to standardized form
+## Number of records by year
 
 ```{r}
 #| echo: false
 #| 
-# Convert dates to R date format
-# xtabs(~Date, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats.
-waterfowl.df$Date.new<- as.Date(waterfowl.df$Date)
-
-select <- is.na(waterfowl.df$Date.new)
-if(any(select)){
-   cat("*** ERROR *** Some dates appear to be invalid \n")
-   waterfowl.df[select, c("Study.area.name","Sample.station.label","Date","Date.new")]
-   stop()
-}
-
-waterfowl.df$Date <- waterfowl.df$Date.new
-
-waterfowl.df$Year <- lubridate::year(waterfowl.df$Date)
 
 cat("\n\nThe number of records by year are \n")
-xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+xtabs(~STUDY_AREA_NAME+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
 
 if(length(unique(waterfowl.df$Year))<3){
     # insufficient data extracted
     cat("\n\n\n*** ERROR *** Less than 3 years of data. No analysis possible \n")
     knitr::knit_exit()
-    stop()
+    #stop()
 }
 
 
@@ -244,30 +213,30 @@ The list of Study Area Names by year in the data is:
 
 # Check that the Study Area Name is the same across all years
 # Look at the output from the xtabs() to see if there are multiple spellings 
-# of the same Study.area.name.
+# of the same STUDY_AREA_NAME.
 
-# We will convert the Study.area.name to Proper Case.
-waterfowl.df$Study.area.name <- stringr::str_to_title(waterfowl.df$Study.area.name)
-xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+# We will convert the STUDY_AREA_NAME to Proper Case.
+waterfowl.df$STUDY_AREA_NAME <- stringr::str_to_title(waterfowl.df$STUDY_AREA_NAME)
+xtabs(~STUDY_AREA_NAME+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
 
-if(!all(grepl(gsub(" ","",params$Study.area.name), gsub(" ","",waterfowl.df$Study.area.name), ignore.case=TRUE))){
-  cat("*** ERROR *** Study.area.names are not consistent\n")
-  cat("A tabulation of Study.area.names in datasets is \n")
-  xtabs(~Study.area.name, data=waterfowl.df, exclude=NULL, na.action=na.pass)
-  cat("Requested study area was ", params$Study.area.name,  "\n")
-  stop("Input data is not all from ", params$Study.area.name)
+if(!all(grepl(gsub(" ","",params$STUDY_AREA_NAME), gsub(" ","",waterfowl.df$STUDY_AREA_NAME), ignore.case=TRUE))){
+  cat("*** ERROR *** STUDY_AREA_NAMEs are not consistent\n")
+  cat("A tabulation of STUDY_AREA_NAMEs in datasets is \n")
+  xtabs(~STUDY_AREA_NAME, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+  cat("Requested study area was ", params$STUDY_AREA_NAME,  "\n")
+  knitr::knit_exit()
 }
 
-if(length(unique(waterfowl.df$Study.area.name))>1){
+if(length(unique(waterfowl.df$STUDY_AREA_NAME))>1){
    cat("*** ERROR *** More than one study area found \n")
    cat("\n\nThe number of records by year are \n")
-   xtabs(~Study.area.name+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
-   stop()
+   xtabs(~STUDY_AREA_NAME+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   knitr::knit_exit()
 }
 
 ```
 
-## Checking Station codes
+## Checking SAMPLE Location coded
 
 While these are not used in the analysis, these labels should be consistent over time:
 
@@ -275,20 +244,22 @@ While these are not used in the analysis, these labels should be consistent over
 #| echo: false
 # Check the Species code to make sure that all the same
 # This isn't used anywhere in the analysis but is useful to know
-xtabs(~Study.area.name+Sample.station.label, data=waterfowl.df, exclude=NULL, na.action=na.pass)
-xtabs(~Sample.station.label+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+xtabs(~STUDY_AREA_NAME+SAMPLE_LABEL, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+xtabs(~SAMPLE_LABEL+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
 ```
 
 
 ## Checking species code
 
-The species code should be the same across the file.
+The species code should be the same across the years. 
+**The following table has the total number of each species seen in each combination
+of location and year.**
 
 ```{r}
 #| echo: false
 # Check the Species code to make sure that all the same
 # This isn't used anywhere in the analysis but is useful to know
-xtabs(~Species+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
+addmargins(xtabs(COUNT~SPECIES_CODE+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass),1)
 
 ```
 
@@ -297,7 +268,7 @@ xtabs(~Species+Year, data=waterfowl.df, exclude=NULL, na.action=na.pass)
 #| echo: false
 
 # Get the file prefix
-file.prefix <- make.names(waterfowl.df$Study.area.name[1])
+file.prefix <- make.names(waterfowl.df$STUDY_AREA_NAME[1])
 file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert . to 
 if(!dir.exists("PLots"))dir.create("Plots")
 file.prefix <- file.path("Plots", file.prefix)
@@ -307,7 +278,7 @@ file.prefix <- file.path("Plots", file.prefix)
 
 # Single Site Analysis
 
-Date for the `r params$Study.area.name` are available from `r min(waterfowl.df$Year, na.rm=TRUE)` to 
+Date for the `r params$STUDY_AREA_NAME` are available from `r min(waterfowl.df$Year, na.rm=TRUE)` to 
 `r max(waterfowl.df$Year, na.rm=TRUE)`. 
 
 This design has multiple stations that are repeatedly measured over time 
@@ -330,8 +301,8 @@ All plots are also saved as separate *png files for inclusion into other reports
 
 ## Maximum counts
 
-The data is first summarized to the date level by summing the count over multiple records 
-(the different species) for each date-sample station combination. 
+The data is first summarized to the date level by summing the count over the different species
+for each date-sample station combination. 
 This reduces the data to one measurement per date per site/year. 
 
 A preliminary plot of the total count is found in @fig-wf-prelim.
@@ -344,29 +315,73 @@ A preliminary plot of the total count is found in @fig-wf-prelim.
 #| message: false
 
 # First aggregate the data by date over all species
-count.date <- plyr::ddply(waterfowl.df, c("Study.area.name","Year","Date","Sample.station.label"), 
+count.date <- plyr::ddply(waterfowl.df, c("STUDY_AREA_NAME","Year","Date","SAMPLE_LABEL"), 
                           plyr::summarize,
-                          total.count=sum(Count, na.rm=TRUE))
+                          total.count=sum(COUNT, na.rm=TRUE))
 
 # Make a preliminary plot of total count by date
 
-prelim.plot <- ggplot(data=count.date, aes(x=Date, y=log(total.count+.5), color=Sample.station.label, linetype=Sample.station.label))+
+prelim.plot <- ggplot(data=count.date, aes(x=Date, y=log(total.count+.5), color=SAMPLE_LABEL, linetype=SAMPLE_LABEL))+
    ggtitle("Waterfowl (total) count data")+
-   geom_point(position=position_dodge(width=.5))+
-   geom_line( position=position_dodge(width=.5))+
-   facet_wrap(~Study.area.name, ncol=1)
+   geom_point(position=position_dodge(width=.05))+
+   geom_line( position=position_dodge(width=.05))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)
 prelim.plot 
 ggsave(plot=prelim.plot, 
        file=paste(file.prefix,'-plot-prelim.png',sep=""),
        h=6, w=6, units="in",dpi=300)
 ```
 
-Notice that there is a definite station effect, where, 
+Notice that there may be evidence of station effect, where 
 for example, the number of birds at certain stations are generally higher than at the other stations 
 because of local station-specific conditions (e.g. better habitat).
 
 Next the maximum count in each month in each station (but only November, December, January, and February) 
-is found and plotted in @fig-wf-prelim2. 
+is found. The maximum counts are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# Find the maximum count each month (Nov/Dec/Jan/Feb only)
+count.date$Month  <- lubridate::month(count.date$Date)
+count.max <- plyr::ddply(count.date, c("STUDY_AREA_NAME","SAMPLE_LABEL","Year","Month"), 
+                         plyr::summarize, 
+                         max.count=max(total.count, na.rm=TRUE))
+count.max$Year.Month <- count.max$Year+((count.max$Month-.5)/12)     # this is the approximate midpoint of each month
+temp <- count.max
+temp$Year.Month <- NULL
+temp
+```
+
+When the maximum counts are restricted to November, December, January, and February, the
+data are now:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+count.max <- count.max[ count.max$Month %in% c(1:2,11:12),]  # only retain N/D/J/F data
+temp <- count.max
+temp$Year.Month <- NULL
+temp
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+if(nrow(count.max)==0){
+   cat("*** ERROR *** No data left to analyze when restricting data to J/F/N/D months \n")
+   knitr::knit_exit()
+}
+```
+
+
+These are plotted in @fig-wf-prelim2. 
 As noted earlier, a better measure may be the median count rather than the mean count. 
 The analysis would proceed in a similar fashion.
 
@@ -377,21 +392,15 @@ The analysis would proceed in a similar fashion.
 #| warning: false
 #| message: false
 
-# Find the maximum count each month (Nov/Dec/Jan/Feb only)
-count.date$Month  <- lubridate::month(count.date$Date)
-count.max <- plyr::ddply(count.date, c("Study.area.name","Sample.station.label","Year","Month"), 
-                         plyr::summarize, 
-                         max.count=max(total.count, na.rm=TRUE))
-count.max$Year.Month <- count.max$Year+((count.max$Month-.5)/12)     # this is the approximate midpoint of each month
-count.max <- count.max[ count.max$Month %in% c(1:2,11:12),]  # only retain N/D/J/F data
-
 # Make a preliminary plot of the maximum 
-prelim.max.plot <- ggplot(data=count.max, aes(x=Year.Month, y=log(max.count+.5), color=Sample.station.label, linetype=Sample.station.label))+
+prelim.max.plot <- ggplot(data=count.max, aes(x=Year.Month, y=log(max.count+.5), color=SAMPLE_LABEL, 
+                                              shape=as.factor(Month), linetype=SAMPLE_LABEL))+
   ggtitle("Waterfowl (max) count in month")+
   geom_point()+
   geom_line()+
-  scale_x_continuous(breaks=min(count.max$Year):(1+max(count.max$Year)))+
-  facet_wrap(~Study.area.name, ncol=1)
+  scale_x_continuous(breaks=integer_breaks())+
+  facet_wrap(~STUDY_AREA_NAME, ncol=1)+
+  scale_shape_discrete(name="Month")
 prelim.max.plot 
 ggsave(plot=prelim.max.plot, 
        file=paste(file.prefix,'-plot-prelim-max.png',sep=""),
@@ -401,22 +410,22 @@ ggsave(plot=prelim.max.plot,
 
 ```
 
-Again there is evidence of a station effect. A month effect is less clear.
+Again there may be evidence of a consistent station effect and/or a consistent month effect.
 
 
 Because this is count data, so a linear mixed model is fit to the logarithm of the maximum call 
 in each month at each transect in each year. The model is:
- $$log(MaxCount) = Year + MonthF+StationF(R) +YearF(R)$$
+ $$log(MaxCount) = \mathit{Year} + \mathit{MonthF}+ \mathit{StationF(R)} +\mathit{YearF(R)}$$
 where 
 
 - $log(MaxCount)$ is logarithm of the maximum count at that station in that month in that year; 
-- $StationF$ represents the station effect; 
-- $YearF$ represents the year-specific effects (process error), and 
-- $Year$ represents the calendar year trend over time. 
+- $\mathit{StationF}$ represents the station effect; 
+- $\mathit{YearF}$ represents the year-specific effects (process error), and 
+- $\mathit{Year}$ represents the calendar year trend over time. 
 
-The $StationF$ term allows for the fact that station-specific conditions may tend to 
+The $\mathit{StationF}$ term allows for the fact that station-specific conditions may tend to 
 affect the counts on this station consistently over time. 
-The $YearF$ term represent the year-specific effects (process error) 
+The $\mathit{YearF}$ term represent the year-specific effects (process error) 
 caused by environmental factors (e.g., a warmer than normal year may elicit more visits from waterfowl).
 
 This model implicitly assumes that the trend in Nov, Dec, Jan and February 
@@ -443,15 +452,19 @@ This model is fit using the *lmer()* function in the lmerTest package
 
 # This is a regression analysis with Year as the trend variable and Month as a seasonal effect.
 # We need to account for the same stations being measured over time and for year specific effects (process error).
-# Because of the small counts, we will try a Poisson model (allowsing for possible overdispersion
+# Because of the small counts, we will try a Poisson model (allowing for possible overdispersion
 # It would be nice to fit a generalized linear mixed model, but there are convergence problems
+
+count.max.pvalue   <- NA # in case model fails
+count.max.slope    <- NA
+count.max.slope.se <- NA
 
 
 count.max$MonthF                <- factor(count.max$Month)
-count.max$Sample.station.labelF <- factor(count.max$Sample.station.label)
+count.max$SAMPLE_LABELF <- factor(count.max$SAMPLE_LABEL)
 count.max$YearF                 <- factor(count.max$Year)
 
-count.max.lmer <- lmerTest::lmer(log(max.count+.5) ~ Year + MonthF +(1|Sample.station.labelF) +(1|YearF), data=count.max)
+count.max.lmer <- lmerTest::lmer(log(max.count+.5) ~ Year + MonthF +(1|SAMPLE_LABELF) +(1|YearF), data=count.max)
 
 anova(count.max.lmer, ddf="Kenward-Roger")
 summary(count.max.lmer)
@@ -473,7 +486,7 @@ count.max.slope.se <- sqrt(diag(vcov(count.max.lmer)))[2]
 
 # extract a table of the slopes
 count.slopes <- data.frame(
-       Study.area.name =count.max$Study.area.name[1],
+       STUDY_AREA_NAME =count.max$STUDY_AREA_NAME[1],
        slope           = fixef(count.max.lmer)["Year"],
        slope.se        = summary(count.max.lmer)$coefficients["Year","Pr(>|t|)"],
        p.value         = summary(count.max.lmer)$coefficients[row.names(summary(count.max.lmer)$coefficients)=="Year"  ,"Pr(>|t|)"], 
@@ -485,12 +498,12 @@ count.slopes
 # compute the fitted values from the model
 # The model was run on the log(average count), so we need to back transform
 count.fitted <- expand.grid(
-                 Study.area.name=count.max$Study.area.name[1],
+                 STUDY_AREA_NAME=count.max$STUDY_AREA_NAME[1],
                  Year=seq(min(count.max$Year, na.rm=TRUE),1+max(count.max$Year, na.rm=TRUE), .1),
                  MonthF=factor(c(1:2,11:12)),
                  stringsAsFactors=FALSE)
 count.fitted$pred.mean <- exp(predict(count.max.lmer, newdata=count.fitted,type="response", re.form=~0))
-head(count.fitted)
+#head(count.fitted)
 
 
 
@@ -501,13 +514,14 @@ count.plot.summary <- ggplot2::ggplot(data=count.max,
    ylab("Maximum Waterfowl Count in month")+
    geom_point(size=3, aes(color=MonthF))+
    geom_line(data=count.fitted, aes(x=Year,y=pred.mean, color=MonthF))+
-   facet_wrap(~Study.area.name, ncol=1, scales="free" )+
-   scale_x_continuous(breaks=min(count.max$Year,na.rm=TRUE):max(count.max$Year,na.rm=TRUE))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=integer_breaks())+
    geom_text(data=count.slopes, aes(x=min(count.max$Year, na.rm=TRUE), y=max(count.max$max.count, na.rm=TRUE)), 
              label=paste("Slope (on log scale) : ",round(count.slopes$slope,2), 
                          " ( SE "  ,round(count.slopes$slope.se,2),")",
                          " p :"    ,round(count.slopes$p.value,3)),
-                         hjust="left")
+                         hjust="left")+
+   scale_color_discrete(name="Month")
 count.plot.summary
 ggsave(plot=count.plot.summary, 
        file=paste(file.prefix,'-count-plot-summary.png',sep=""),
@@ -521,14 +535,15 @@ exp.count.max.slope = exp(count.max.slope)
 and the p-value of the hypothesis of no trend. With 
 `r length(unique(waterfowl.df$Year))` years of data, 
 the estimated slope is 
-`r round(count.max.slope,3)` 
-(SE `r round(count.max.slope.se,3)`) /year 
-(`r insight::format_p(count.max.pvalue)`).
+`r try(round(count.max.slope,3), silent=TRUE)` 
+(SE `r try(round(count.max.slope.se,3), silent=TRUE)`) /year 
+(`r try(insight::format_p(count.max.pvalue), silent=TRUE)`).
 
 The reported common slope is on the logarithmic scale.
-This corresponds to an approximate exp(`r round(count.max.slope,3)`)=`r round(exp.count.max.slope,2)`x 
+This corresponds to an approximate exp(`r try(round(count.max.slope,3),silent=TRUE)`)=
+`r try(round(exp.count.max.slope,2), silent=TRUE)`x 
 multiplicative change/year, i.e. the mean maximum count in year $t+1$ is about 
-`r round(exp.count.max.slope,2)`x the mean maximum count in year $t$.
+`r try(round(exp.count.max.slope,2), silent=TRUE)`x the mean maximum count in year $t$.
 Because the analysis is done on the logarithmic scale, the fitted trend line will 
 look non-linear on the original (non-transformed) scale.
 
@@ -565,7 +580,7 @@ The bottom right plot shows that the station effects with some stations tending 
 #| warning: false
 #| message: false
 
-#Acheck for autocorreclation 
+# Check for autocorrelation 
 count.max$resid <- log(count.max$max.count+.5) - predict(count.max.lmer, newdata=count.max, re.form=~0)
 mean.resid <- plyr::ddply(count.max, "Year", summarize, mean.resid=mean(resid))
 resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
@@ -580,13 +595,13 @@ Whenever an analysis of a trend over time is conducted, the analysis
 should test and adjust for autocorrelation. 
 Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
 The test for autocorrelation commonly used is the Durbin-Watson test and we find
-(`r insight::format_p(count.max.dwres1$p)` for the test of no autocorrelation.
+(`r try(insight::format_p(count.max.dwres1$p), silent=TRUE)` for the test of no autocorrelation.
 
 
 The analysis of the median count per month would follow the same steps as shown above 
 and the R code is easy to modify. 
-Similarly, this analysis was conducted at the total count level (over all species) b
-ut could be done for individual species. 
+Similarly, this analysis was conducted at the total count level (over all species) but 
+could be done for individual species. 
 One potential problem is that in some cases, species information is only recorded at the 
 Genus or higher level. 
 In these case, this data will have to discarded when the analysis is done at the species level, 
@@ -602,6 +617,130 @@ these have a very strong assumption that all species are equally detectable by t
 This is unlikely to be true. Secondly, the actual counts are quite small, 
 and diversity measures that rely on actual counts (e.g. Simpson’s diversity) 
 will not perform well. For this reason, I do not recommend an analysis on the diversity of the observations.
+
+
+# Power analysis
+
+A power/sample size analysis was conducted to determine the number of years of sampling needed to detect
+changes over time. The steps in the power/sample size analysis are:
+
+- Compute a single number summarizing the response at this site in each year. The mean number of calls is currently recorded by transect and the average
+over the transects will be computed.
+- Analyze the log(mean response) using a simple linear regression. This will give an estimate of the combined year-specific and sampling variation
+around regression line (overall sd).
+- Use the overall SD to estimate power and sample size requirements.
+
+Here are the overall means for each year for each response:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+
+# get the mean values of 1 number per site per year. Notice that since the counts are taken in N/D/J/F, we need to use a "winter year" rather
+# than a calendar year to group counts properly
+
+temp <- count.max
+temp$oldYear <- temp$Year
+temp$Month
+temp$Year[ temp$Month %in% c(1,2)] <- temp$Year[ temp$Month %in% c(1,2)] -1
+
+count.mean1 <- plyr::ddply(count.max, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                                mean.max=mean(max.count, na.rm=TRUE))
+count.mean1$Mean.response <- count.mean1$mean.max
+count.mean1$Response      <- "Mean max N/D/J/F"
+
+all.resp <- plyr::rbind.fill(count.mean1)
+all.resp
+
+```
+
+The above data needs to be checked if there are any suspicious values.  
+
+We use the *lm()* function to fit linear regression over time on the log(scale) and obtain the combined year-specific effect (process error) 
+plus sampling variation standard deviation (@tbl-resid-sd).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| tbl-cap: "Estimated residual (process + sampling) standard deviation"
+#| label: tbl-resid-sd
+
+# if any of the values are zero, add a small offset
+all.resp <- plyr::ddply(all.resp, "Response", function(x){
+     offset <- min(x$Mean.response[x$Mean.response>0]) *.5
+     x$Mean.response <- x$Mean.response + offset
+     x
+})
+
+# fit a regression line on the log(scale) and get the residual sd
+residual.sd <- plyr::ddply(all.resp, "Response", function(x){
+    fit <- lm(log(Mean.response) ~ Year, data=x)
+    sd  <- summary(fit)$sigma
+    data.frame(sd=sd)
+})
+
+ft <- flextable(residual.sd)
+ft <- width(ft, j=1, width=2)
+ft <- width(ft, j=2, width=2)
+ft <- colformat_double(ft, j=2, digits=4)
+ft <- set_header_labels(ft, values = list(sd="Process + sampling SD"))
+ 
+ft
+```
+
+This is then used to estimate the power to detect various proportional changes over time (@fig-power).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| fig-cap: "Estimated power to detect proportional changes over time"
+#| label: fig-power
+
+# remove any missing values for resid.sd
+residual.sd <- residual.sd[!is.na(residual.sd$sd),]
+
+# estimate power at changes of 0 to .10/year with sample sizes of 5 to 20 years for each response
+scenarios <- expand.grid(n.years=seq(5,20,1),
+                         slope  =seq(0, .1, .02))
+power.detect <- plyr::ddply(residual.sd, "Response", function(x, scenarios){
+   
+   power <- plyr::adply(scenarios,1, function(scenario,x){
+      #browser()
+      power <- slr.power.stroup(Trend=scenario$slope,
+                                Xvalues=1:scenario$n.years,
+                                Process.SD=x$sd,
+                                Sampling.SD=0)
+      power
+   },x=x)
+}, scenarios=scenarios)
+
+ggplot(data=power.detect, aes(x=n.years, y=power.2s, color=as.factor(slope)))+
+   ggtitle("Estimated power", subtitle="alpha=0.05")+
+   geom_point()+
+   geom_line()+
+   facet_wrap(~Response, ncol=1)+
+   ylab("Power")+xlab("Number of years in the study")+
+   scale_color_discrete(name="Proportional\nyearly\nslope")+
+   xlim(0,NA)+ylim(0,1)+
+   geom_hline(yintercept=0.8)
+
+
+```
+ 
+The proportional yearly slope indicates the effect size of interest. For example, a value
+of .02 would indicated a 2% change/year in the mean response.
+ 
+In cases of high variability, the power is uniformly low 
+to detect the yearly proportion change over time. 
+In cases of low variability power is uniformly very high
+to detect the yearly proportion change over time.
+
 
 # Summary
 
