@@ -1,0 +1,1818 @@
+---
+# This script will demonstrate how to analyze the ALPINE data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+
+# Notice that this example only has 1 years of data. We simulate multiple years to illustrate
+# how to do a trend analysis.
+#
+# This is a comparison among ECODOMAINS.
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2023-01-31  First Edition
+
+# Summary of Protocol
+#     “Permanent transects are established from just below present treeline 
+#     to just above the transition from vegetation to rock (or ridgeline, whichever comes first).
+#     A 50cm X 50cm quadrat is sampled at regular intervals along the transect.
+#
+#     The % foliar cover by species is recorded in each quadrat.”
+
+#
+title: "Alpine Vegetation - LTEM - EcoDomain Comparison" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+options(width=200)
+
+# load libraries
+library(bcmaps)    # to get the EcoDomains
+library(broom.mixed)# for handling output from lmerTest
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(emmeans)   # for extracting the individual slopes
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(sf)
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+```
+
+# To do
+
+- change log(PERCENT_COvER) to logit() scale
+- set q in the header for diversity
+
+# Summary of Alpine Vegetation LTEM protocol
+
+## Basic protocol
+
+As taken from the protocol document:
+
+> “Permanent transects are established from just below present 
+> treeline to just above the transition from vegetation to rock 
+> (or ridgeline, whichever comes first). 
+> A 50cm X 50cm quadrat is sampled at regular intervals along the transect.
+> 
+> The % foliar cover by species is recorded in each quadrat.”
+
+The data collected under this protocol at each survey consists of the.
+
+- Species. The species of vegetation in the plot.
+- % foliar cover. What fraction of the plot is covered by this species. 
+
+## Database structure
+
+The relevant fields in the database are
+
+-	*Transect*. The transect measured.
+-	*Plot*. The plot within the transect.
+-	*Date*. The date the data was collected. The Year is extracted from this date.
+-	*Species*. What species were seen
+-	*Percent Cover*. The percent cover of each species in the plot.
+
+The longitude and latitude are used to find the EcoDomain of each study area.
+
+
+# Reading and checking the data
+
+## Extract all LTEM data
+
+The database was queried for all observations from this protocol in the Province.
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Alpine", site.names="**ALL**")
+```
+
+
+```{r}
+#| echo: false
+if(nrow(data.extract$user.data)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. See help \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+veg.df <- data.extract$user.data
+veg.df$STUDY_AREA_NAME_shrt <- substr(veg.df$STUDY_AREA_NAME,1,20)
+
+```
+
+The following surveys and years of surveys were found.
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=veg.df, exclude=NULL, na.action=na.pass)
+```
+
+It is not necessary that every STUDY_AREA be measured in every year and the number of measurements at each STUDY_AREA
+can vary within years and across years.
+
+If STUDY_AREA is only measured in one year, it does not provide any information
+on the trends and can be dropped. Similary, STUDY_AREAS with only 2 years of data, provide no information 
+on the uncertainty; they can be retained or dropped.
+
+STUDY_AREAs dropped for insuffient data are:
+
+```{r}
+#| echo: false
+#| tbl-cap: 'Study areas dropped because of insufficient years of data'
+n.years <- plyr::ddply(veg.df, c("STUDY_AREA_NAME"), plyr::summarize, n.years=length(unique(Year)))
+n.years.drop <- n.years[ n.years$n.years <2,]
+
+veg.df <- veg.df[ !veg.df$STUDY_AREA_NAME %in% n.years.drop$STUDY_AREA_NAME,]
+
+ft <- flextable(n.years.drop)
+ft <- width(ft, j=1, width=4, unit="in")
+ft <- set_header_labels(ft, STUDY_AREA_NAME="Study Area", n.years="# years of data")
+ft
+```
+
+
+## Ecodomain of each study area
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, no long/lat data was provided
+and these study areas will also be excluded.
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD),
+     LATITUDE_DD = mean(LATITUDE_DD))
+
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data \n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+```
+
+The classification of each STUDY_AREA
+into its EcoDomain is:
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+     cat("\n\n\n*** ERROR *** Some study areas do not have an ecodomain \n")
+    knitr::knit_exit()
+    #stop()
+}
+
+# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area
+cat("# check if at least 2 eco domains at at least 4 study areas and at least 3 years x 2 ecodomains x 4 study area\n")
+
+veg.df <- merge(veg.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+**Mt Robson has two separate transects entered as two separate projects **
+
+## Checking species code
+
+The species code should be the same across for all data values..
+Note that in many years, a code of *NULL* was entered to indicate no vegetation of any species
+were detected. **This table shows the total detections for each species.year combination over all the transects in all STUDY_AREAs and EcoDomains - check that codes are sensible.**
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=veg.df, exclude=NULL, na.action=na.pass)
+
+if(length(unique(veg.df$SPECIES_CODE))>1){
+   cat("*** WARNING *** More than one species name found - OK if some are NULL \n")
+   #stop()
+}
+
+```
+
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+if(!dir.exists(file.path("Plots","zzMultiSite")))dir.create(file.path("Plots","zzMultiSite"))
+file.prefix <- file.path("Plots", "zzMultiSite")
+```
+
+# Multi-Site Analysis
+
+We will now compare the trends in the EcoDomains. 
+
+This design has multiple transects that are repeatedly measured over time. 
+Please refer to the Fitting Trends with Complex Study Designs document in the 
+CommonFile directory for information on fitting trends with complex study designs. 
+
+All analyses were done using the R (R Core Team, 2023)  analysis system. 
+All plots are also saved as separate *png files for inclusion into other reports.
+
+
+## % cover
+
+The data is first summarized to the plot level by summing the % cover, 
+excluding non-plant coverage (e.g. rocks). 
+Then the average total % cover for each transect is computed by averaging the 
+total % cover over the plots within each transect. 
+This makes an implicit assumption that all transects will have the same set of 
+plots measured over time. 
+If some plots have to be discarded (e.g. due to damage), the analysis will only be approximate, 
+but unless the number of discarded plots is very large (e.g. more than a 1/3), 
+the approximation should be adequate. 
+This makes the unit of the analysis, the transect within each year.
+
+### Summarize to transect level
+
+The data is first summarized to the transect-year level by finding 
+the mean % cover per plot on a transect  for each individual transect. 
+This reduces the data to one measurement per transect per STUDY_AREA/year. 
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+cover <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT","PLOT"), plyr::summarize,
+                          PERCENT_COVER=sum(PERCENT_COVER, na.rm=TRUE))
+
+# Compute the average total cover for each transect so I can plot these over time
+cover.transect <- plyr::ddply(cover, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT"), plyr::summarize,
+                          PERCENT_COVER=mean(PERCENT_COVER, na.rm=TRUE))
+cover.transect
+
+temp <- cover.transect
+temp$STUDY_AREA_NAME <- NULL
+head(temp)
+
+# make a transect label that is unique to each study area names
+cover.transect$SA.TRANSECT <- paste0(cover.transect$STUDY_AREA_NAME, "....", cover.transect$TRANSECT)
+
+```
+
+
+It is implicitly assumed that all transects are run on all days within a STUDY_AREA
+so every transect has the same number of days of measurement. 
+If transects are changed over time, that is not a problem, but transects 
+should not be introduced or removed part way through a year.
+
+### Preliminary plot
+
+A summary plot of the mean percent cover in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-cover-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-cover-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+cover.transect.mean <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   PERCENT_COVER=mean(PERCENT_COVER))
+
+prelim.plot <- ggplot(data=cover.transect.mean, aes(x=Year, y=log(PERCENT_COVER+.01)))+
+   ggtitle("Alpine Vegetation % cover",
+           subtitle="Each line represents one study area")+
+   ylab("log(Percent Cover))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+ggsave(plot=prelim.plot, 
+       file=file.path(file.prefix,'Plot-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each transect is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The model, in a short-hand notation is:
+
+$$log(PercentCover) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{TransectF(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(PercentCover)$ is logarithm of the average percent cover per plot for that transect in that year. 
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{TransectF(R)}$ represents the (random) transect effect; 
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The 
+The $\mathit{TransectF}$ term allows for the fact that transect-specific conditions 
+may tend to affect the counts on this transect consistently over time. 
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may cause more plant growth).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+Some caution is needed if any of the values are 0 as log(0) is not defined. 
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset) 
+is added to all values before the analysis proceeds.
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+count.fit.pvalue     <- NA # in case the model does not fit
+count.fit.slope      <- NA
+count.fit.slope.se   <- NA
+count.fit.slope.anti <- NA
+
+# create factors
+cover.transect$ECODOMAINF       <- factor(cover.transect$ECODOMAIN)
+cover.transect$YearF            <- factor(cover.transect$Year)
+cover.transect$TRANSECTF        <- factor(cover.transect$SA.TRANSECT)
+cover.transect$STUDY_AREA_NAMEF <- factor(cover.transect$STUDY_AREA_NAME)
+
+year.offset <- 2000
+cover.transect$Year <- cover.transect$Year - year.offset
+
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+count.fit <- lmerTest::lmer(log(PERCENT_COVER+.01) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|TRANSECTF) + 
+                (1|YearF:ECODOMAINF), data=cover.transect)
+
+cat("\n\n")
+anova(count.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(count.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-cover-test-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-cover-test-eco-slopes
+
+#temp <-anova(count.fit, ddf="Kenward-Roger")
+temp <-anova(count.fit, ddf="Satterthwaite")
+#temp
+
+count.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+count.fit.slope  <- fixef(count.fit)[2]
+count.fit.slope.se <- sqrt(diag(vcov(count.fit)))[2]
+
+count.fit.slope.anti <- exp(count.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-cover-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-cover-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(count.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(count.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-cover-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-cover-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(count.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-cover-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in total percent cover."
+#| label: fig-cover-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count+.5), so we need to back transform
+count.fitted <- unique( cover.transect[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+count.fitted <- plyr::adply(count.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(cover.transect$Year, na.rm=TRUE), max.year=max(cover.transect$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+count.fitted$pred.ecodomain.mean.log <- predict(count.fit, newdata=count.fitted,type="response", re.form=~0) 
+count.fitted$pred.ecodomain.mean <- exp(count.fitted$pred.ecodomain.mean.log) - .01
+count.fitted$Year <- count.fitted$Year + year.offset
+#head(count.fitted)
+
+fitted.plot <- ggplot(data=cover.transect.mean, aes(x=Year, y=log(PERCENT_COVER+.01)))+
+   ggtitle("Total percent cover")+
+   ylab("log(Total percent cover)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=count.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.plot 
+ggsave(plot=fitted.plot, 
+       file=file.path(file.prefix,'Plot-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-cover-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-cover-var-comp
+
+
+temp <- as.data.frame(VarCorr(count.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *TRANSECT* component represents the variation in intercepts among multiple transects within the same STUDY_AREA.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-cover-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-cover-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        count.fit <- lmerTest::lmer(log(PERCENT_COVER+.5) ~ Year + (1|TRANSECTF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(count.fit)["Year"]
+        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")
+   #coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-cover-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-cover-year-effects
+
+year.eff <- ranef(count.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-cover-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-cover-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(count.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+
+```
+
+
+
+## Species Richness
+
+A similar analysis can be applied to the average species richness at the plot level 
+as in the previous section. 
+The data is first summarized to the plot level by counting the number of plant species,
+excluding non-plant richnessage (e.g. rocks). 
+Some case is needed when plants are only identified to the Genus or Family level – 
+these may have to be removed to avoid double counting.
+For example, in the test dataset, there were cases where the id was unknown and 
+the plant was labeled “unknown #1”. This was not acceptable to the SPI database, 
+so an identification was given to the level it was known which was sometimes 
+as vague as *Poaceae* (family) or *Dicotyledoneae* (class). 
+It is assumed that a plant was a different species than all the 
+others that were known when it is labelled as “unknown2”
+
+Then the average species richness (at the plot level) for each transect 
+is computed by averaging the species richness over the plots within each transect. 
+This makes an implicit assumption that all transects will have the same set of 
+plots measured over time so that the transect mean richness has roughly the same precision in all transects. 
+If some plots have to be discarded (e.g. due to damage), the analysis will only be approximate, 
+but unless the number of discarded plots is very large (e.g. more than a 1/3), 
+the approximation should be adequate. 
+This makes the unit of the analysis, the transect within each year.
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Compute the total richness for each plot in each transect
+#  Analysis of mean plot-level species richness
+#  Only want those species that have cover > 0. Species with cover = 0 are not present.
+
+# Compute the species richness for each plot in each transect
+richness <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT","PLOT"), plyr::summarize,
+                          richness=length(unique(SPECIES_CODE[ PERCENT_COVER > 0])))
+
+# Compute the average richness for each transect so I can plot these over time
+richness.transect <- plyr::ddply(richness, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT"), plyr::summarize,
+                          richness=mean(richness, na.rm=TRUE))
+
+temp <- richness.transect
+temp$STUDY_AREA_NAME <- NULL
+head(temp)
+
+# make a transect label that is unique to each study area names
+richness.transect$SA.TRANSECT <- paste0(richness.transect$STUDY_AREA_NAME, "....", richness.transect$TRANSECT)
+
+```
+
+
+It is implicitly assumed that all transects are run on all days within a STUDY_AREA
+so every transect has the same number of days of measurement. 
+If transects are changed over time, that is not a problem, but transects 
+should not be introduced or removed part way through a year.
+
+### Preliminary plot
+
+A summary plot of the mean richness in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-richness-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-richness-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+richness.transect.mean <- plyr::ddply(richness.transect, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   richness=mean(richness))
+
+prelim.plot <- ggplot(data=richness.transect.mean, aes(x=Year, y=log(richness)))+
+   ggtitle("Alpine Vegetation Mean Species Richness per plot",
+           subtitle="Each line represents one study area")+
+   ylab("log(Richness))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+ggsave(plot=prelim.plot, 
+       file=file.path(file.prefix,'Plot-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each transect is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The model, in a short-hand notation is:
+
+$$log(Richness) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{TransectF(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(Richness)$ is logarithm of the average percent richness per plot for that transect in that year. 
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{TransectF(R)}$ represents the (random) transect effect; 
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The 
+The $\mathit{TransectF}$ term allows for the fact that transect-specific conditions 
+may tend to affect the counts on this transect consistently over time. 
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may elict greater plant growth).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+Some caution is needed if any of the values are 0 as log(0) is not defined. 
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset) 
+is added to all values before the analysis proceeds.
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+count.fit.pvalue     <- NA # in case the model does not fit
+count.fit.slope      <- NA
+count.fit.slope.se   <- NA
+count.fit.slope.anti <- NA
+
+# create factors
+richness.transect$ECODOMAINF       <- factor(richness.transect$ECODOMAIN)
+richness.transect$YearF            <- factor(richness.transect$Year)
+richness.transect$TRANSECTF        <- factor(richness.transect$SA.TRANSECT)
+richness.transect$STUDY_AREA_NAMEF <- factor(richness.transect$STUDY_AREA_NAME)
+
+year.offset <- 2000
+richness.transect$Year <- richness.transect$Year - year.offset
+
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+count.fit <- lmerTest::lmer(log(richness) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|TRANSECTF) + 
+                (1|YearF:ECODOMAINF), data=richness.transect)
+
+cat("\n\n")
+anova(count.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(count.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-richness-test-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-richness-test-eco-slopes
+
+#temp <-anova(count.fit, ddf="Kenward-Roger")
+temp <-anova(count.fit, ddf="Satterthwaite")
+#temp
+
+count.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+count.fit.slope  <- fixef(count.fit)[2]
+count.fit.slope.se <- sqrt(diag(vcov(count.fit)))[2]
+
+count.fit.slope.anti <- exp(count.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-richness-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-richness-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(count.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(count.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-richness-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-richness-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(count.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-richness-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in mean species richness per plot."
+#| label: fig-richness-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count+.5), so we need to back transform
+count.fitted <- unique( richness.transect[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+count.fitted <- plyr::adply(count.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(richness.transect$Year, na.rm=TRUE), max.year=max(richness.transect$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+count.fitted$pred.ecodomain.mean.log <- predict(count.fit, newdata=count.fitted,type="response", re.form=~0) 
+count.fitted$pred.ecodomain.mean <- exp(count.fitted$pred.ecodomain.mean.log) 
+count.fitted$Year <- count.fitted$Year + year.offset
+#head(count.fitted)
+
+fitted.plot <- ggplot(data=richness.transect.mean, aes(x=Year, y=log(richness+.01)))+
+   ggtitle("Species Richness Data")+
+   ylab("log(Mean Species Richness + .01)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=count.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.plot 
+ggsave(plot=fitted.plot, 
+       file=file.path(file.prefix,'Plot-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-richness-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-richness-var-comp
+
+
+temp <- as.data.frame(VarCorr(count.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *TRANSECT* component represents the variation in intercepts among multiple transects within the same STUDY_AREA.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-richness-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-richness-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(richness.transect, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        count.fit <- lmerTest::lmer(log(richness+.5) ~ Year + (1|TRANSECTF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(count.fit)["Year"]
+        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")
+   #coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-richness-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-richness-year-effects
+
+year.eff <- ranef(count.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-richness-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-richness-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(count.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+
+```
+
+
+
+## Diversity
+
+Species richness is one measure of diversity and there are many more such as 
+Simpson’s or Shannon’s measure of diversity. 
+A similar analysis as for species richness can be done on these other measures of 
+diversity, but are no longer recommended because these measures are 
+often insensitive to big changes in diversity and because they do not account for 
+functional similarity among species. 
+For example, the diversity of six dramatically different species of 
+plants is considered to be no more diverse than six related species.
+
+Leinster and Cobbold (2012) showed how different diversity 
+measures all belong to a continuum (called a diversity profile) 
+and how species similarity can be used to augment the standard diversity measures. 
+The diversity profile also has a number of advantages over the traditional 
+measures of diversity as noted by Chao and Jost (2013) and Jost (2013).
+
+The key difficulty with traditional measures of diversity is that there is 
+non-linear relationship between the diversity measure and biological implications. 
+For this reason, it is often useful to think in terms of “effective number of species” 
+(Jost, 2006; Jost 2013). 
+Briefly, the effective number of species is the number of 
+equally abundant species that give rise to a particular diversity index value. 
+
+Jost (2013) provides an example of the problems with traditional diversity measures:
+
+> “… suppose you are comparing the diversity of aquatic microorganisms before and after an oil spill. 
+> You wouldn't want to measure that diversity by species richness because even 
+> a massive toxic event is sure to leave a few vagrant individuals of each pre-spill species, 
+> and species richness doesn't distinguish between one individual of Species X or a million; 
+> the pre- and post-spill species counts might not be very different, 
+> even if the pre- and post-spill species frequencies are very different. 
+> So if you are a good traditional biologist you might use the popular Gini-Simpson diversity index, 
+> which is  $1-\sum_i{p_i^2}$
+> where $p_i$  is a measure of relative abundance for species i. 
+> Suppose that the pre-spill Gini-Simpson index is .99 and the post-spill index is .97. 
+> If you are a good traditional biologist you would figure out that 
+> this drop is statistically significant, but you would conclude that the magnitude of the drop is small. 
+> You might even say  (very wrongly) that the diversity has dropped by 2%,
+> which sounds like a small drop, nothing to worry about.
+>
+> The error which virtually all biologists make is that the Gini-Simpson index 
+> is not itself a diversity, and is highly nonlinear. 
+> The pre-spill community with a Gini-Simpson index of 0.99 has the same diversity 
+> as a community of 100 equally-common species. 
+> The post-spill community with a Gini-Simpson index of  0.97 has the same diversity 
+> as a community of 33 equally-common species. 
+> The difference between the pre-and post-spill diversities is in fact enormous. 
+> The drop in diversity is 66%, not 2%! 
+> This is not just a matter of different definitions of diversity, as some people would like to say. 
+> Rather, it is a matter of the indices being nonlinear with respect to our intuitive concept of diversity.”
+
+Leinster and Cobbold (2012) defined the diversity profile as series of “effective numbers” 
+dependent on an index $q$ (which ranges from 0 to infinity) and a similarity matrix $\bf{Z}$ 
+(whose $(i,j)$ entry measures the similarity of species $i$ and species $j$ from 0 (not similar) 
+to 1 (completely similar)). The diversity profile is computed as:
+$$^{q}D^Z(\bf{p})= \left( {\sum {p_i(\bf{Zp})^{q-1}_i}} \right) ^{1/(1-q)}$$
+where the vector $\bf{p}$ is the relative abundance of the species present 
+(i.e., excluding species with 0 abundance), and $\bf{Z}$ is the similarity matrix 
+among the vector of species. 
+As shown by Leinster and Cobbold (2012), many of the common diversity indices are special 
+cases of the above. For example, if $q = 0$, the above equation reduces to species richness; 
+if $q = 1$ and $\bf{Z}=\bf{I}$, then the above is related to the Shannon Index; 
+and if $q=2$ and $\bf{Z}=\bf{I}$, then the above is related to the Simpson Index of diversity.
+
+The $\b{Z|$ matrix (measure of similarity) resolves a number of problems 
+with the common diversity measures. If two species are virtually identical 
+(entries of $\bf{Z}$ close to 1), then the diversity measure above effectively treats them equivalently as a single species. 
+The difficulty, is of course, defining this similarity matrix.
+
+I’ve included a briefing note on the analysis of diversity in 
+an environmental impact assessment case with this material 
+as illustration of the method. 
+For the rest of this section, the diversity measures will be computed assuming a 
+diagonal $\bf{Z}$ matrix, i.e. every species is functionally distinct which is obviously incorrect. 
+
+```{r}
+#| echo: false
+# We construct the diversity profile for each transect in each year by summing
+# the % cover over all the plots in a transect year
+cover.transect <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","Year","TRANSECT","SPECIES_CODE"),
+                              plyr::summarize,  
+                              PERCENT_COVER=sum(PERCENT_COVER, na.rm=TRUE))
+
+# We need to make each transect have PERCENT_COVER for ALL possible species in the overall database
+
+cover.transect <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME"), function (x){
+   # extract all possible combination of year and species and transect and expand each transect
+   trans.sp.year <- expand.grid(STUDY_AREA_NAME=unique(x$STUDY_AREA_NAME),
+                                SPECIES_CODE   =unique(x$SPECIES_CODE),
+                                Year           =unique(x$Year),
+                                TRANSECT       =unique(x$TRANSECT), stringsAsFactors=FALSE)
+   x <- merge(x, trans.sp.year, all=TRUE, by=)
+   x$PERCENT_COVER[ is.na(x$PERCENT_COVER)] <- 0
+   x
+})
+cover.transect$SA.Y.T <- paste0(cover.transect$STUDY_AREA_NAME,"...",cover.transect$Year,"...",cover.transect$TRANSECT)
+
+# remove any year.transect that has 0 cover in total
+total.cover <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","Year","TRANSECT"), plyr::summarize,
+                           PERCENT_COVER=sum(PERCENT_COVER, na.rm=TRUE))
+total.cover <- total.cover[ total.cover$PERCENT_COVER > 0,]
+total.cover$SA.Y.T <- paste0(total.cover$STUDY_AREA_NAME,"...",total.cover$Year,"...",total.cover$TRANSECT)
+
+cover.transect <- cover.transect[ cover.transect$SA.Y.T %in% total.cover$SA.Y.T,]
+
+# Sort the data by species
+cover.transect <- cover.transect[ order(cover.transect$STUDY_AREA_NAME,
+                                        cover.transect$Year,
+                                        cover.transect$TRANSECT,
+                                        cover.transect$SPECIES_CODE),]
+
+# We dont have information on the Z matrix (species similarity) so we will
+# use the default which is diagonal.
+profiles <- ddply(cover.transect, c("STUDY_AREA_NAME","Year","TRANSECT"), function(x){
+     cat('Profile computatations for ', unlist( x[1,1:3]), "\n")
+     profile <- div.profile(x$PERCENT_COVER)
+     profile
+})
+
+
+# Plot the profiles
+plot.profile <- ggplot2::ggplot(data=profiles, aes(x=q, y=diversity, color=TRANSECT, linetype=factor(Year) ))+
+  ggtitle("Diversity profiles")+
+  ylab("Effective number of species")+
+  xlab("q")+
+  geom_line()+
+  #facet_wrap(~STUDY_AREA_NAME, ncol=1)+
+  scale_linetype_discrete(name="Year")
+plot.profile
+ggsave(plot=plot.profile, 
+       file=paste(file.prefix,'-diversity-profiles.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+```
+
+
+Once the diversity profiles have been computed, 
+the effective number of species for any value of $q$ can be extracted and analyzed 
+in the same way as the analysis for the average species richness.
+
+For example, here are the extracted diversity values for $q = 2$ which is related to the Simpson Index of diversity:
+
+```{r}
+#| echo: false
+
+# Extract the value of effective number of species for q=2 and do the analysis
+diversity.transect <- profiles[ profiles$q==2.0,]
+
+diversity.transect <-merge(diversity.transect, site.long.lat[,c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN")], by="STUDY_AREA_NAME")
+#diversity.transect
+temp <- diversity.transect
+temp$diversity <- round(temp$diversity, 1)
+temp$STUDY_AREA_NAME <- NULL
+print(temp, row.names=FALSE)
+
+# make a transect label that is unique to each study area names
+diversity.transect$SA.TRANSECT <- paste0(diversity.transect$STUDY_AREA_NAME, "....", diversity.transect$TRANSECT)
+```
+
+### Preliminary plot
+
+A summary plot of the mean diversity in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-diversity-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-diversity-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+diversity.transect.mean <- plyr::ddply(diversity.transect, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   diversity=mean(diversity))
+
+prelim.plot <- ggplot(data=diversity.transect.mean, aes(x=Year, y=log(diversity)))+
+   ggtitle("Alpine Vegetation Mean Species Richness per plot",
+           subtitle="Each line represents one study area")+
+   ylab("log(Richness))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+ggsave(plot=prelim.plot, 
+       file=file.path(file.prefix,'Plot-prelim.png'),
+       h=4, w=6, units="in",dpi=300)
+
+```
+
+### Model
+
+A non-parallel slope model is fit allowing for a different average slope (over the multiple STUDY_AREAs) 
+in each EcoDomains (non-parallel slopes). Within each EcoDomain, each STUDY_AREA's slope is allowed to vary 
+randomly around the average slope for the EcoDomain. Within each STUDY_AREA, each transect is allowed to have
+a different intercept but common slope. Finally, we allow for year-specific factor within each EcoDomain.
+
+The model, in a short-hand notation is:
+
+$$log(Diversity) \sim \mathit{EcoDomain} + \mathit{Year} + \mathit{EcoDomain}:\mathit{Year}+
+\mathit{StudyArea} + \mathit{TransectF(R)} + \mathit{StudyArea}:\mathit{Year(R)} + \mathit{YearF:EcoDomain(R)}$$
+
+where 
+
+- $log(Diversity)$ is logarithm of the diversity score (effective number of species) for that transect in that year. 
+- $\mathit{Year}$ term represents the average (over all EcoDomains) calendar year trend over time. 
+- $\mathit{EcoDomain}$ term represents a different intercept for each EcoDomain
+- $\mathit{EcoDomain}:\mathit{Year}$ term represents the differential average slope for each EcoDomain
+- $\mathit{StudyArea}:\mathit{Year(R)}$ term represents the random slopes within each EcoDomain for each study area
+- $\mathit{TransectF(R)}$ represents the (random) transect effect; 
+- $\mathit{YearF:EcoDomain(R)}$ represents the (random) year-specific effects (process error), thare are allowed
+to vary across EcoDomains.
+
+The 
+The $\mathit{TransectF}$ term allows for the fact that transect-specific conditions 
+may tend to affect the counts on this transect consistently over time. 
+The $\mathit{YearF:EcoDomain}$ term represent the year-specific effects (process error) 
+caused by environmental factors (e.g., a warmer than normal year may lead to more plant growth).
+
+Model fit on the logarithmic scale assume that effects are multiplicative over time, 
+so that the when the actual fit is done on the logarithmic scale, 
+the trends are linear. For example, a trend may assume that there is constant 
+5% change over time rather than a fixed 1-unit change per year. 
+Some caution is needed if any of the values are 0 as log(0) is not defined. 
+In these cases, a small constant (typically ½ of the smallest positive value in the dataset) 
+is added to all values before the analysis proceeds.
+
+The model was fit using the *lmerTest()* function (Kuznetsova, 2017) in *R* (R Core Team, 2023). 
+
+```{r}
+#| echo: false
+#| 
+
+count.fit.pvalue     <- NA # in case the model does not fit
+count.fit.slope      <- NA
+count.fit.slope.se   <- NA
+count.fit.slope.anti <- NA
+
+# create factors
+diversity.transect$ECODOMAINF       <- factor(diversity.transect$ECODOMAIN)
+diversity.transect$YearF            <- factor(diversity.transect$Year)
+diversity.transect$TRANSECTF        <- factor(diversity.transect$SA.TRANSECT)
+diversity.transect$STUDY_AREA_NAMEF <- factor(diversity.transect$STUDY_AREA_NAME)
+
+year.offset <- 2000
+diversity.transect$Year <- diversity.transect$Year - year.offset
+
+# See https://stats.stackexchange.com/questions/31569/questions-about-how-random-effects-are-specified-in-lmer
+count.fit <- lmerTest::lmer(log(diversity) ~ Year + ECODOMAINF + Year:ECODOMAINF +
+#                (1+Year|STUDY_AREA_NAMEF) +
+                (1|STUDY_AREA_NAMEF) + (Year-1|STUDY_AREA_NAME) +
+                (1|TRANSECTF) + 
+                (1|YearF:ECODOMAINF), data=diversity.transect)
+
+cat("\n\n")
+anova(count.fit, ddf="Satterthwaite")
+cat("\n\n")
+summary(count.fit)
+```
+
+
+### Test for no difference in trends among EcoDomains
+
+After the model is fit, the ANOVA tables summarizes the test for no differences in trends
+among the EcoDomains in @tbl-diversity-test-eco-slopes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| tbl-cap: "ANOVA table for testing for differences in trends among EcoDomains"
+#| label: tbl-diversity-test-eco-slopes
+
+#temp <-anova(count.fit, ddf="Kenward-Roger")
+temp <-anova(count.fit, ddf="Satterthwaite")
+#temp
+
+count.fit.pvalue.parallel <- temp[3,"Pr(>F)"]
+count.fit.slope  <- fixef(count.fit)[2]
+count.fit.slope.se <- sqrt(diag(vcov(count.fit)))[2]
+
+count.fit.slope.anti <- exp(count.fit.slope)
+
+temp<- tidy(temp)
+temp$p.value <- insight::format_p(temp$p.value)
+temp$sumsq <-NULL
+temp$meansq <- NULL
+temp$statistic <- NULL
+temp$term <- gsub("F$","", temp$term)
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, term="Source" )
+ft <- width(ft, j="p.value", width=2, unit="in")
+ft <- colformat_double(ft, j="DenDF", digits=1)
+ft
+
+
+```
+
+The *Year:ECODOMAIN* term tests the hypothesis that the slopes in all of the EcoDomains are equal. If the p-value is large,
+then there is no evidence that the slopes among the EcoDomains are different.
+
+### Estimated slopes
+
+The estimated coefficients from *R* output above do not have a direct interpretation because of the way that *R* codes the
+design matrix for discrete variables such as the EcoDomain.These coefficients associated with each EcoDomain
+are the difference in the slopes between the slope for that particular EcoDomain and the reference EcoDomain (typically
+the EcoDomain that is "first" alphabetically).
+
+The estimated slope for each EcoDomain are estimated using the *emmeans* package (Lenth, 2023) presented in @tbl-diversity-slope-ecodomains.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated slope in each EcoDomain"
+#| label: tbl-diversity-slope-ecodomains
+
+# get the individaul slopes for each ecomean
+eco.slopes.emmo <- emmeans::emtrends(count.fit, "ECODOMAINF", var="Year", mode="satterthwaite")
+temp <- multcomp::cld(eco.slopes.emmo)
+
+eco.slopes.df <- as.data.frame(summary(eco.slopes.emmo, infer=TRUE))
+eco.slopes.df$ECODOMAIN <- as.character(eco.slopes.df$ECODOMAINF)
+
+eco.slopes.d1        <- as.character(eco.slopes.df[1,"ECODOMAINF"])
+eco.slopes.d1.slope  <- eco.slopes.df[1,"Year.trend"]
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- set_header_labels(ft, ECODOMAINF="Eco Domain", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The estimated trends (on the logarithmic scale) can be interpretted as the proportional change per year.
+For example, the slope of `r round(eco.slopes.d1.slope,3)` in the `r eco.slopes.d1` EcoDomain can be interpretted
+as an approximate `r round(eco.slopes.d1.slope*100,1)`% change in the mean call rate per year.
+
+The *Grouping* column indicates if there is evidence of a difference among the slopes across EcoDomains.
+EcoDomains that contain the same "digit" would indicate no evidence of a difference in the mean slopes
+among the EcoDomains. This is a summary of the overall p-value for parallelism found in the ANOVA table of
+`r insight::format_p(count.fit.pvalue.parallel)`. For more information on interpretting the *.group* variable,
+refer to https://schmidtpaul.github.io/DSFAIR/compactletterdisplay.html.
+
+### Mean slope over all EcoDomains
+
+The average slope over all EcoDomains (giving each EcoDomain equal weight regardless of the number of study areas 
+in the EcoDomain) shown in @tbl-diversity-slope-mean.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated mean slope over all EcoDomains"
+#| label: tbl-diversity-slope-mean
+
+# get the mean slopes over all EcoDomains
+eco.slopes.mean <- emmeans::emtrends(count.fit, ~1, var="Year", mode="satterthwaite")
+temp <- summary(eco.slopes.mean, infer=TRUE)
+
+eco.slopes.mean.df        <- as.data.frame(summary(eco.slopes.mean, infer=TRUE))
+eco.slopes.mean.slope     <- eco.slopes.mean.df[1,"Year.trend"]
+eco.slopes.mean.slope.se  <- eco.slopes.mean.df[1,"SE"]
+eco.slopes.mean.slope.p   <- eco.slopes.mean.df[1,"p.value"]
+
+
+temp$t.ratio <- NULL
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(as.data.frame(temp))
+ft <- width(ft, j=1, width=1, unit="in")
+ft <- width(ft, j="p.value", width=1, unit="in")
+ft <- set_header_labels(ft, '1'="Mean slope", Year.trend="Slope", SE='SE', df='df', lower.CL='95% LCL', upper.CL='95% UCL', .group='Grouping')
+ft <- colformat_double(ft, j=c(2,3,5,6), digits=4)
+ft <- colformat_double(ft, j="df", digits=1)
+ft <- add_footer_lines(ft, top = TRUE, values = attr(temp,"mesg"))
+ft
+```
+
+The overall average slope over all EcoDomain is 
+`r round(eco.slopes.mean.slope,3)` (SE `r round(eco.slopes.mean.slope.se,3)` with a p-value of
+`r insight::format_p(eco.slopes.mean.slope.p)`. This is the same p-value from the ANOVA table
+for the *Year* term.
+
+The estimated mean slope is interpreted in the same way as the slopes for each EcoDomain.
+
+### Summary plot
+
+@fig-diversity-trend shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend in each EcoDomain.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in effective number of species."
+#| label: fig-diversity-trend
+#| warning: false
+#| message: false
+
+
+# compute the fitted values from the model
+# The model was run on the log(average count+.5), so we need to back transform
+count.fitted <- unique( diversity.transect[,c("ECODOMAIN","ECODOMAINF","STUDY_AREA_NAME","STUDY_AREA_NAMEF")])
+count.fitted <- plyr::adply(count.fitted,1,function(x,min.year,max.year){
+    Year <- seq(min.year, max.year, .1)
+    x <- x[rep(1, length(Year)),]
+    x$Year <- Year
+    x
+}, min.year=min(diversity.transect$Year, na.rm=TRUE), max.year=max(diversity.transect$Year, na.rm=TRUE))
+
+# get the EcoDomain predictions
+count.fitted$pred.ecodomain.mean.log <- predict(count.fit, newdata=count.fitted,type="response", re.form=~0) 
+count.fitted$pred.ecodomain.mean     <- exp(count.fitted$pred.ecodomain.mean.log) 
+count.fitted$Year <- count.fitted$Year + year.offset
+#head(count.fitted)
+
+fitted.plot <- ggplot(data=diversity.transect.mean, aes(x=Year, y=log(diversity)))+
+   ggtitle("Diversity data (effective number of species)")+
+   ylab("log(Effective Number of Speices)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())+
+   geom_line(data=count.fitted, aes(y=pred.ecodomain.mean.log), color="red")+
+   geom_text(data=eco.slopes.df, aes(label=paste0("Slope :", round(Year.trend,3),
+                                                  " (SE ",round(SE,3),") ",
+                                                  insight::format_p(p.value)
+                                                  ), x=-Inf, y=Inf), vjust=1.5, hjust=-0.1)+
+   xlab("Year\nRed line is fitted line for the EcoDomain")
+fitted.plot 
+ggsave(plot=fitted.plot, 
+       file=file.path(file.prefix,'Plot-Fitted-trend.png'),
+       h=4, w=6, units="in",dpi=300)
+
+
+```
+
+### Estimated variance component
+
+The estimated variance components are shown in @tbl-diversity-var-comp.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated variance components"
+#| label: tbl-diversity-var-comp
+
+
+temp <- as.data.frame(VarCorr(count.fit))
+temp$vcov <- NULL
+temp$grp <- gsub("F$","", temp$grp)
+#temp$var1 <- NULL
+temp$var1 <- gsub("(Intercept)","", temp$var1, fixed=TRUE)
+temp$var2 <- NULL
+
+ft <- flextable(temp)
+ft <- set_header_labels(ft, grp="Component", var1="Interaction",sdcor="SD")
+ft <- width(ft, j=1, width=2, unit="in")
+ft <- width(ft, j=2, width=1, unit="in")
+ft <- colformat_double(ft, j="sdcor", digits=3)
+ft
+
+```
+
+The *STUDY_AREA_NAME* and *STUDY_AREA_NAME:Year* represent the variation in the intercepts and slopes among study areas within
+an EcoDomain. The *TRANSECT* component represents the variation in intercepts among multiple transects within the same STUDY_AREA.
+The *YearF:ECODOMAIN* components represents the variation in the year specific factors (process error) within the EcoDomains.
+Finally the *Residual* component represents the left-over, unexplained variation in the data.
+
+Notice in this case, that the variation in the slopes for each STUDY_AREA within the EcoDomains is very close to 0, i.e., the
+different study areas could all have similar slopes within the EcoDomain. If you examine the individual slopes in each study area
+(see the individual study area reports), the estimated standard error is quite large indicating the the slopes could be roughly
+the same across study areas (see @fig-diversity-indiv-slopes).
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Comparing the individual slopes within each EcoRegion"
+#| label: fig-diversity-indiv-slopes
+
+# estimate the slopes for each study area individually
+indiv.slopes <- plyr::ddply(diversity.transect, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN"), function (x){
+    #browser()
+    slope <- tryCatch({
+        count.fit <- lmerTest::lmer(log(diversity) ~ Year + (1|TRANSECTF) + (1|YearF), data=x)#, lmerControl(optimizer="bobyqa"))
+        slope           = fixef(count.fit)["Year"]
+        slope.se        = summary(count.fit)$coefficients["Year","Pr(>|t|)"]
+        p.value         = summary(count.fit)$coefficients[row.names(summary(count.fit)$coefficients)=="Year"  ,"Pr(>|t|)"] 
+        data.frame(slope=slope, slope.se=slope.se, p.value=p.value)
+        },
+        error=function(cond) {
+            return(data.frame(slope=NA, slope.se=NA, p.value=NA))
+        }
+        )
+})
+
+ggplot(data=indiv.slopes, aes(x=slope, y=STUDY_AREA_NAME_shrt))+
+   geom_point()+
+   geom_errorbarh(aes(xmin=slope-1.96*slope.se, xmax=slope+1.96*slope.se), height=.1)+
+   facet_wrap(~ECODOMAIN, ncol=1, scales="free_y")+
+   geom_vline(data=eco.slopes.df, aes(xintercept=Year.trend, y=NULL), color="red")
+   #coord_cartesian(xlim=c(-1,1))
+
+```
+
+
+
+
+The year specific effects vary slightly among the EcoDomains as shown in @fig-diversity-year-effects.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Plot of year specific effects"
+#| label: fig-diversity-year-effects
+
+year.eff <- ranef(count.fit)$`YearF:ECODOMAINF`
+names(year.eff)[1] <- "year.effect"
+year.eff$Year <- as.numeric(substr(row.names(year.eff),1,4))
+year.eff$ecodomain <- substring(row.names(year.eff),6)
+
+
+ggplot(data=year.eff, aes(x=Year, y=year.effect, color=ecodomain))+
+  ggtitle("Estimated year-specific effects")+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  scale_x_continuous(breaks=2000:3000)+
+  ylab("Year specific effects")
+```
+
+We see that the year-specific effects can vary across EcoDomains, e.g., 
+the year-specific impact of weather can be different in the different EcoDomains.
+This is not surprising because B.C. is a large Province!
+
+
+
+### Residual plots
+
+Residual plots are presented in @fig-diversity-resid.
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots from trend in mean transect counts"
+#| label: fig-diversity-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plots and save them to the directory
+diag.plot <- sf.autoplot.lmer(count.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggsave(plot=diag.plot, 
+       file=file.path(file.prefix,"Plot-Residual.png"),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+In the upper left corner is a plot of residuals vs. 
+the fitted values. A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot. Points should be close to the dashed reference line. 
+Fortunately, the analysis is fairly robust against non-normality so only extreme departures are worrisome. 
+Caterpiller plots attempt to show the distribution of the random effects. 
+The bottom left plot shows the distribution of the transect effects. 
+The bottom right plot shows the distribution of the year-specific effects (process variation). 
+In this case, the estimated process variation is very small with most of points very close to 0.
+
+
+
+
+
+
+# Summary
+
+This analysis examines trends across EcoDomains. The model has an overall average trend, a EcoDomain specific trend,
+and random trends for each Study Area among the EcoDomain trends. With many study areas and many years of data collected
+in each study area, the design has a high power to detect even a moderate trend over time.
+
+
+# References
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017).
+“lmerTest Package: Tests in Linear Mixed Effects Models.” 
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13 <https://doi.org/10.18637/jss.v082.i13>.
+
+Lenth R (2023). emmeans: Estimated Marginal Means, aka Least-Squares Means.
+R package version 1.8.4-1,
+  <https://CRAN.R-project.org/package=emmeans>.
+
+R Core Team (2032). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+

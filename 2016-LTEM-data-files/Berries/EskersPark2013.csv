@@ -1,0 +1,21 @@
+Study Area Name,Sample Station Label,Date,Time,End Time,Surveyor,Species,Count,UTM Zone,Easting,Northing,Comments,Inventory Method,Berry count,Stem diameter (mm),Average weight (gms),N.for.Weight
+Eskers Park,SV01-stem1,10-jul-13,10:00,x,Anna McIndoe,SHEPCAN,1,x,x,x,average weight based on N=26,berry count,62,6.3,0.13,25
+Eskers Park,SV01-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,143,6.5,0.13,25
+Eskers Park,SV02-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,18,5.7,0.13,25
+Eskers Park,SV02-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,63,5.8,0.13,25
+Eskers Park,SV03-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,23,6.6,0.13,25
+Eskers Park,SV03-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,35,8.5,0.13,25
+Eskers Park,SV04-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,15,6.2,0.13,25
+Eskers Park,SV04-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,51,5.6,0.13,25
+Eskers Park,SV05-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,59,7,0.13,25
+Eskers Park,SV05-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,89,6.1,0.13,25
+Eskers Park,SV06-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,78,10.4,0.13,25
+Eskers Park,SV06-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,57,8.5,0.13,25
+Eskers Park,SV07-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,29,4.9,0.13,25
+Eskers Park,SV07-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,48,7,0.13,25
+Eskers Park,SV08-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,185,10.5,0.13,25
+Eskers Park,SV08-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,121,5.6,0.13,25
+Eskers Park,SV09-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,57,7.5,0.13,25
+Eskers Park,SV09-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,104,7.3,0.13,25
+Eskers Park,SV10-stem1,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,39,5.7,0.13,25
+Eskers Park,SV10-stem2,10-jul-13,10:00,,Anna McIndoe,SHEPCAN,1,,,,average weight based on N=26,berry count,9,5.5,0.13,25

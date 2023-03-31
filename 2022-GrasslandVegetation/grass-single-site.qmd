@@ -1,0 +1,1887 @@
+---
+# This script will demonstrate how to analyze the GRASSLAND data collected as 
+# part of the LongTerm Ecological Monitoring Initiative
+
+# Notice that this example only has small number of years of data. 
+# We simulate multiple years to illustrate how to do a trend analysis.
+#
+#
+# Only one study area at time can only be analyzed with a script. 
+#
+# This was programmed by Carl James Schwarz, Statistics and Actuarial Science, SFU
+# cschwarz@stat.sfu.ca
+#
+# 2022-12-06 First Edition
+
+# Summary of Protocol
+#     “Permanent transects are established in grasslands
+#     A 50cm X 50cm quadrat is sampled at regular intervals along the transect.
+#
+#     The % foliar cover by species is recorded in each quadrat.”
+
+title: "`r paste0('Grassland Vegetation - LTEM - ',params$STUDY_AREA_NAME)`" 
+date: today
+date-format: YYYY-MM-DD
+execute: 
+  error: true
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+
+params:
+#  STUDY_AREA_NAME: "Kikomun"
+  STUDY_AREA_NAME: "Kalamalka"
+
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# load libraries
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(reshape2)  # for melting and casting
+library(lmerTest)  # for the linear mixed modelling
+library(sf)        # to read the database
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("../2022-CommonFiles/common.functions.R")
+source("../2022-CommonFiles/read.LTEM.R")
+```
+
+
+# Summary of Grassland Vegetation LTEM protocol
+
+## Basic protocol
+
+As taken from the protocol document: **I don't have copy of protocol**
+
+> “Permanent transects are established .... 
+> A 50cm X 50cm quadrat is sampled at regular intervals along the transect.
+> 
+> The % foliar cover by species is recorded in each quadrat.”
+
+The data collected under this protocol at each survey consists of the.
+
+- Species. The species of vegetation in the plot.
+- % foliar cover. What fraction of the plot is covered by this species. 
+
+
+## Cautions about the protocol.
+
+### Don’t use 0 to indicate a missing value.
+
+If a species was not seen on a plot during a visit, 
+this is indicated by the lack of a record for that species code. 
+Unfortunately, it is now impossible to know if the species were actually looked 
+for and not seen, or the species could not be identified and so was not recorded. 
+This issue could be problematic when looking at the impact of climate change where new 
+species are introduced to the province. H
+ow it known that scientists from 20 years ago were able to recognize this plant? 
+The current protocol involves identifying EVERY plant in the plot, so this may not be an issue, 
+but it should be stressed in the protocol that EVERY plant needs to be identified 
+so that missingness really implies a 0 cover value.
+
+### Replacing transects/plots
+
+The protocol is silent on when and how to replace transect and/or plots. 
+For example, is a plot is “damaged”, it should be simply dropped from further 
+measuring for all subsequent years. 
+However, if more than ½ of the plots are lost on a transect, 
+then the entire transect should like be replaced. 
+New transects should have a unique transect number (i.e. do not reuse transect labels). 
+The old and new transect should be run in parallel for at 
+least one season to calibrate the new transect with the existing transects.
+
+### Measuring % cover.
+
+The protocol requires the actual % cover to be measured for each species, 
+rather than simply classifying it into a category (e.g. between 20% and 30% cover). 
+This is the preferred method. 
+However, very rare species are assigned a categorical cover value (.5, .2 or .1 %). 
+Given the rarity of these species, this should be fine.
+
+### Species recorded at Genus or Family or higher level.
+
+This may be a bit problematic when species richness is recorded, 
+as then a species may be double counted. 
+Some editing of the data may be required before analyzing mean (plot) species richness. 
+Presumably, the similarity matrix (Z) will indicate a high functional similarity between these 
+Genus and Family levels and the distinct species so that the effective 
+number of species diversity measures will be unaffected.
+
+
+## Database structure
+
+The relevant fields in the database are
+
+-	*Transect*. The transect measured.
+-	*Plot*. The plot within the transect.
+-	*Date*. The date the data was collected. The Year is extracted from this date.
+-	*Species*. What species were seen
+-	*Percent Cover*. The percent cover of each species in the plot.
+
+
+# Reading and checking the data
+
+```{r}
+#| echo: false
+#| include: false
+
+data.extract <- read.LTEM.data(study.type="Grasslands",
+                                         site.names=params$STUDY_AREA_NAME)
+
+if(nrow(data.extract$user.data)==0){
+    # no data extracted
+    cat("\n\n\n*** ERROR *** No data extracted. Check your STUDY_AREA_NAME in the yaml \n")
+    knitr::knit_exit()
+    stop()
+}
+```
+
+The database was read for all records pertaining to the
+`r params$STUDY_AREA_NAME`. The following surveys were found:
+
+```{r}
+#| echo: false
+cat("Surveys with the data \n")
+data.extract$projects[,c("SPI_PROJECT_ID","SURVEY_ID","START_DATE","STUDY_AREA_NAME")]
+```
+
+
+```{r}
+#| echo: false
+
+veg.df <- data.extract$user.data
+
+# Generate two more years of simulated data by bootstrapping the last years of data at the plot level
+last.year <- max(veg.df$Year, na.rm=TRUE)
+veg.df.last <- veg.df[veg.df$Year == last.year,]
+boot.veg.df <- plyr::ldply(last.year+(3:7), function(new.year, veg.df){
+   veg.df <- plyr::ddply(veg.df, c("PLOT"), function(x){
+       x <- x[ sample(1:nrow(x), nrow(x), replace=TRUE ),]
+       x
+   }) 
+   veg.df$Year <- new.year
+   veg.df
+},veg.df=veg.df.last)
+veg.df <- rbind(veg.df.last, boot.veg.df)
+xtabs(~Year, data=veg.df, exclude=NULL, na.action=na.pass)
+
+```
+
+The following data editing was performed
+
+## Variables names corrected for *R*
+
+Variable names in *R* must start with a letter and contain letters or numbers or underscores.
+Blanks in variable names are not normally allowed, nor are special characters such as %.
+These are normally replaced by periods (".") in the variable name.
+
+```{r}
+#| echo: false
+
+#------------ Data Editing -----------
+# fix up variable names in the data.frame.
+# Variable names in R must start with a letter and contain letters or number or _. 
+# Blanks in variable names are not normally allowed. Blanks will be replaced by . (period)
+cat("\nOriginal variable names in data frame\n")
+names(veg.df)
+
+names(veg.df) <- make.names(names(veg.df))
+
+cat("\nCorrected variable names of data frame\n")
+names(veg.df)
+```
+
+# Number of years of data
+
+The number of records by year is:
+
+```{r}
+#| echo: false
+
+cat("\n\nThe number of records by year are \n")
+xtabs(~STUDY_AREA_NAME+Year, data=veg.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+
+if(length(unique(veg.df$Year))<3){
+    # insufficient data extracted
+    cat("\n\n\n*** ERROR *** Less than 3 years of data. No analysis possible \n")
+    knitr::knit_exit()
+    stop()
+}
+```
+
+## Checking Study Area Name
+
+The Study Area Name should be recorded consistently across years, otherwise 
+it may indicate that different sites are being studies. The study area name
+is converted to Title Case.
+
+The list of Study Area Names by year in the data is:
+
+```{r}
+#| echo=FALSE
+
+# Check that the Study Area Name is the same across all years
+# Look at the output from the xtabs() to see if there are multiple spellings 
+# of the same STUDY_AREA_NAME.
+
+# We will convert the STUDY_AREA_NAME to Proper Case.
+veg.df$STUDY_AREA_NAME <- stringr::str_to_title(veg.df$STUDY_AREA_NAME)
+xtabs(~STUDY_AREA_NAME+Year, data=veg.df, exclude=NULL, na.action=na.pass)
+
+if(!all(grepl(params$STUDY_AREA_NAME, veg.df$STUDY_AREA_NAME, ignore.case=TRUE))){
+  cat("*** ERROR *** STUDY_AREA_NAMEs are not consistent\n")
+  cat("A tabulation of STUDY_AREA_NAMEs in datasets is \n")
+  xtabs(~STUDY_AREA_NAME, data=veg.df, exclude=NULL, na.action=na.pass)
+  knitr::knit_exit()
+}
+
+if(length(unique(veg.df$STUDY_AREA_NAME))>1){
+   cat("*** ERROR *** More than one study area found \n")
+   cat("\n\nThe number of records by year are \n")
+   xtabs(~STUDY_AREA_NAME+Year, data=veg.df, exclude=NULL, na.action=na.pass)  # check the date formats. 
+   knitr::knit_exit()
+}
+
+```
+
+You should also check the *PLOT* and *TRANSECT* labels for typos, e.g., inconsistencies
+across years in the transect or plot informatin. This is difficult to automate and needs a human touch.
+
+```{r}
+#| echo=FALSE
+
+# Check the plot codes. We need to extract and separate the transect and plot fields
+
+
+xtabs(~TRANSECT+PLOT, data=veg.df, exclude=NULL, na.action=na.pass)
+xtabs(~Year+TRANSECT, data=veg.df, exclude=NULL, na.action=na.pass)
+xtabs(~Year+PLOT,     data=veg.df, exclude=NULL, na.action=na.pass)
+
+# Make the plot codes a combination of transect number and plot code just in case this is not done in the database
+veg.df$PLOT  <- paste0(veg.df$TRANSECT, "...", veg.df$PLOT)
+xtabs(~TRANSECT+PLOT, data=veg.df, exclude=NULL, na.action=na.pass)
+
+```
+
+
+## Checking species code
+
+The species codes should be the "same* across all years, i.e., consistent case, etc.
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+xtabs(~SPECIES_CODE, data=veg.df, exclude=NULL, na.action=na.pass)
+xtabs(~SPECIES_CODE+Year, data=veg.df, exclude=NULL, na.action=na.pass)
+
+
+```
+
+Note that the value of *NULL* indicates no vegetation was recorded on this plot and is not a species.
+These values will be deleted
+
+```{r}
+#| echo: false
+# Exclude all species code = NULL which is usually rock and other junk
+dim(veg.df)
+veg.df <- veg.df[ !veg.df$SPECIES_CODE %in% c("NULL"),]
+dim(veg.df)
+xtabs(~SPECIES_CODE, data=veg.df, exclude=NULL, na.action=na.pass)
+```
+
+## Check the Percent Cover values
+
+The percent cover values should be numeric and not missing.
+
+```{r}
+#| echo: false
+#! error: true
+
+xtabs(~PERCENT_COVER, data=veg.df, exclude=NULL, na.action=na.pass)
+
+# list the missing values
+if(sum(is.na(veg.df$PERCENT_COVER))>0){
+  cat("Missing percent cover in the following records\n")
+  veg.df[ is.na(veg.df$PERCENT_COVER), c("Year","TRANSECT","PLOT","SPECIES_CODE")]
+}
+# convert these to 0
+veg.df$PERCENT_COVER[ is.na(veg.df$PERCENT_COVER)] <- 0
+
+```
+
+```{r}
+#| echo: false
+
+# Get the file prefix
+file.prefix <- make.names(veg.df$STUDY_AREA_NAME[1])
+file.prefix <- gsub(".", '-', file.prefix, fixed=TRUE) # convert blanks to -
+file.prefix <- file.path("Plots", file.prefix)
+```
+
+
+# Single Site Analysis
+
+Date for the `r params$STUDY_AREA_NAME` are available from `r min(veg.df$Year, na.rm=TRUE)` to 
+`r max(veg.df$Year, na.rm=TRUE)`. 
+
+
+This design has multiple transects that are repeated measured over time 
+with multiple plots measured on each transect that are also repeated measured over time. 
+Please refer to the *Fitting Trends with Complex Study Designs* document in the CommonFile 
+directory for information on fitting trends with complex study designs. 
+
+All analyses were done using the R (R Core Team, 2022)  analysis system. 
+The *R* code is general enough that if more than one transect is present, 
+it will automatically choose the more complex linear mixed models as seen in the other protocols.
+All plots are also saved as separate *png files for inclusion into other reports.
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#  Analysis of mean total cover
+```
+
+## Total Cover. 
+
+The data is first summarized to the plot level by summing the % cover, 
+excluding non-plant coverage (e.g. rocks). 
+Then the average total % cover for each transect is computed by averaging the 
+total % cover over the plots within each transect. 
+This makes an implicit assumption that all transects will have the same set of 
+plots measured over time. 
+If some plots have to be discarded (e.g. due to damage), the analysis will only be approximate, 
+but unless the number of discarded plots is very large (e.g. more than a 1/3), 
+the approximation should be adequate. 
+This makes the unit of the analysis, the transect within each year.
+
+A summary plot of the total % cover on each plot is shown in Figure @fig-tcover-prelim.
+.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the total % cover. Each dot represents a plot on the transect."
+#| label: fig-tcover-prelim
+#| warning: false
+#| message: false
+# Compute the total cover for each plot in each transect
+cover <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","Year","TRANSECT","PLOT"), plyr::summarize,
+                          cover=sum(PERCENT_COVER, na.rm=TRUE))
+
+# Compute the average total cover for each transect so I can plot these over time
+cover.transect <- plyr::ddply(cover, c("STUDY_AREA_NAME","Year","TRANSECT"), plyr::summarize,
+                          cover=mean(cover, na.rm=TRUE))
+cover.transect
+
+# Make a preliminary plot of cover by years
+
+prelim.cover.plot <- ggplot(data=cover, aes(x=Year, y=cover, color=TRANSECT, linetype=TRANSECT))+
+   ggtitle("Mean total cover")+
+   ylab("Total % cover on the plots")+
+   geom_point(position=position_dodge(width=.2))+
+   geom_line(data=cover.transect)+
+   scale_x_continuous(breaks=min(cover$Year, na.rm=TRUE):max(cover$Year, na.rm=TRUE))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)
+prelim.cover.plot 
+ggsave(plot=prelim.cover.plot, 
+       file=paste(file.prefix,'-cover-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+```
+
+
+Notice that there is evidence of a transect effect, 
+where, for example, the total % cover on some transects tends to be
+higher than at the other transects because of local transect-specific conditions (e.g. better soil).
+
+A linear mixed model regression can be used to look for changes over time using the model
+$$\mathit{TotalCover} = \mathit{Year} + \mathit{TransectF(R)}+ \mathit{YearF(R)}$$
+where
+
+- $\mathit{TotalCover}$ the mean (over plots) total % cover for a transect in a year; 
+- $\mathit{TransectF}$ represents the (random) transect effect; 
+- $\mathit{YearF}$ represents the year-specific effects (process error); and 
+- $\mathit{Year}$ represents the calendar year trend over time.  
+
+Plants on a plot are a mixture of annuals, 
+biennials and perennials so the year-specific effects 
+may vary by species and so in the context of total cover, 
+the year-specific effects are an average over all species. 
+
+
+These models are fit using the *lmer()* functions in *R*
+and results summarized in @fig-tcover-summary.
+
+
+```{r}
+#| echo: false
+
+# This is a regression analysis with Year as the trend variable and Transect as a random effects.
+# We need to account for the same transect (and plots) being measured over time.
+# Because this is a linear mixed model and the because the total cover is typically large enough, no transformation
+# is needed.
+
+cover.fit.pvalue   <- NA # in case the model fails
+cover.fit.slope    <- NA
+cover.fit.slope.se <- NA
+
+
+# define the YearF effect for process error (year specific effcts)
+cover.transect$YearF     <- factor(cover.transect$Year)
+cover.transect$TransectF <- factor(cover.transect$TRANSECT)
+#cover.transect
+
+n.transects <- length(unique(cover.transect$TRANSECT))
+if(n.transects > 1){
+   cover.fit <-  lmerTest::lmer(cover ~ Year + (1|TransectF) + (1|YearF), data=cover.transect)
+   anova(cover.fit,dfm='Kenward-Roger')
+   summary(cover.fit)
+   #VarCorr(cover.fit)
+
+   cover.fit.pvalue <- anova(cover.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
+   cover.fit.slope  <- fixef(cover.fit)[2]
+   cover.fit.slope.se <- sqrt(diag(vcov(cover.fit)))[2]
+}
+if(n.transects==1){
+   cover.fit <-  lm(cover ~ Year , data=cover.transect)
+   anova(cover.fit)
+   summary(cover.fit)
+   #VarCorr(cover.fit)
+
+   cover.fit.pvalue <- anova(cover.fit)[1,"Pr(>F)"]
+   cover.fit.slope  <- coef(cover.fit)[2]
+   cover.fit.slope.se <- sqrt(diag(vcov(cover.fit)))[2]
+}
+
+```
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in total % cover."
+#| label: fig-tcover-summary
+#| warning: false
+#| message: false
+
+# extract the slope
+cover.slopes <- data.frame(
+       STUDY_AREA_NAME = cover.transect$STUDY_AREA_NAME[1],
+       slope           = cover.fit.slope,
+       slope.se        = cover.fit.slope.se,
+       p.value         = cover.fit.pvalue, 
+       #r2             = summary(cover.fit)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+cover.slopes
+
+
+# compute the fitted values from the model
+cover.fitted <- data.frame(
+                 STUDY_AREA_NAME=cover.transect$STUDY_AREA_NAME[1],
+                 Year=seq(min(cover$Year, na.rm=TRUE),max(cover$Year, na.rm=TRUE), .1),
+                 stringsAsFactors=FALSE)
+if(n.transects> 1)cover.fitted$pred.mean <- predict(cover.fit, newdata=cover.fitted,type="response", re.form=~0)
+if(n.transects==1)cover.fitted$pred.mean <- predict(cover.fit, newdata=cover.fitted,type="response")
+#head(cover.fitted)
+
+# Plot with trend line 
+cover.plot.summary <- ggplot2::ggplot(data=cover,
+                                    aes(x=Year, y=cover))+
+   ggtitle("Total Species Cover")+
+   ylab("Total % cover")+
+   geom_point(size=3, aes(color=TRANSECT),position=position_dodge(w=0.2))+
+   geom_line(data=cover.fitted, aes(x=Year,y=pred.mean))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=min(cover$Year, na.rm=TRUE):max(cover$Year,na.rm=TRUE))+
+   geom_text(data=cover.slopes, aes(x=min(cover$Year, na.rm=TRUE), y=max(cover$cover, na.rm=TRUE)), 
+             label=paste("Slope : ",round(cover.slopes$slope,2), 
+                         " ( SE "  ,round(cover.slopes$slope.se,2),")",
+                         " p :"    ,round(cover.slopes$p.value,3)),
+                         hjust="left")
+cover.plot.summary
+ggsave(plot=cover.plot.summary, 
+       file=paste(file.prefix,'-cover-plot-summary-lmer.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+
+```
+
+@fig-tcover-summary shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend. With 
+`r length(unique(veg.df$Year))` years of data, 
+the estimated slope is 
+`r try(round(cover.fit.slope,3), silent=TRUE)` 
+(SE `r try(round(cover.fit.slope.se,3), silent=TRUE)`) percent cover/year 
+(`r try(insight::format_p(cover.fit.pvalue), silent=TRUE)`).
+
+
+
+
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots for the analysis of total % cover "
+#| label: fig-tcover-resid
+#| warning: false
+#| message: false
+
+
+# Look at the residual plot 
+if(n.transects >1)diag.plot <- sf.autoplot.lmer(cover.fit)  # residual and other diagnostic plots
+if(n.transects==1)diag.plot <-    autoplot     (cover.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggplot2::ggsave(plot=diag.plot, 
+                file=paste(file.prefix,"-cover-residual-lmer-plot.png",sep=""),
+                h=6, w=6, units="in", dpi=300)
+
+```
+
+
+Residual plots are presented in @fig-tcover-resid.
+With only `r length(unique(veg.df$Year))` years of data, 
+the plots are not very informative.
+The plots are not very informative. 
+In the upper left corner is a plot of residuals vs. the fitted values. 
+A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot of the residual. 
+Points should be close to the solid reference line. 
+Fortunately, the analysis is fairly robust against non-normality of the residuals 
+(and in fact makes no assumption of normality) so only extreme departures are worrisome. 
+The bottom left plot examines the distribution of the year-specific effects. 
+As expected the effects are small (all of the dots are close to 0). 
+The bottom right plot examine looks at the distribution of the random effect of transect. 
+With only a few transects the plot is not very informative, 
+but the fact that the 95% confidence interval for each random 
+effect does not cover 0 indicates evidence of a transect effect (this is not surprising).  
+
+It will also be possible to covariates such as soil condition in a 
+transect to try and explain some of the variation over 
+time using a multiple regression. 
+With only `r length(unique(veg.df$Year))`
+years of data available, this not sensible.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# check for autocorrelation - look at the average residual over time
+if(n.transects >1)cover.transect$resid <- cover.transect$cover - predict(cover.fit, newdata=cover.transect, re.form=~0)
+if(n.transects==1)cover.transect$resid <- cover.transect$cover - predict(cover.fit, newdata=cover.transect)
+mean.resid <- plyr::ddply(cover.transect, "Year", summarize, mean.resid=mean(resid))
+resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+cover.dwres1 <- car::durbinWatsonTest(resid.fit)
+#cover.dwres1
+cover.dwres2 <- lmtest::dwtest(resid.fit)
+#cover.dwres2
+
+
+```
+
+Whenever an analysis of a trend over time is conducted, the analysis 
+should test and adjust for autocorrelation. 
+Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
+The test for autocorrelation commonly used is the Durbin-Watson test and we find
+`r try(insight::format_p(cover.dwres1$p), silent=TRUE)` for the test of no autocorrelation.
+
+
+This analysis was conducted at the total count level (over all species) 
+and also for individual species – but the data are likely to very sparse 
+and not useful for individual species. 
+One potential problem is that in some cases, species information is only 
+recorded at the Genus or higher level.  In these case, this data will have to 
+discarded when the analysis is done at the species level, but then you are 
+making an implicit assumption that recording at the Genus level happens at random 
+and is unrelated to the response. 
+
+The analysis of the % cover for an individual species would 
+follow similar steps as shown above. 
+However, for species with smaller % cover, it is advisable to transform the 
+observed % cover to an empirical logit(% cover)
+$$logit(\% cover) = log \left( {\frac{\%cover}{100\%-\%cover}} \right)$$
+to avoid the regression line from going below 0% or above 100%, 
+following the recommendation of Warton and Hui (2011). 
+You will also have to impute 0 values if the species is not listed found in a plot in a year. 
+
+The R code is easy to modify. 
+
+
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+## Species richness. 
+
+A similar analysis can be applied to the average species richness at the plot level 
+as in the previous section. 
+The data is first summarized to the plot level by counting the number of plant species,
+excluding non-plant coverage (e.g. rocks). 
+Some case is needed when plants are only identified to the Genus or Family level – 
+these may have to be removed to avoid double counting.
+For example, in the test dataset, there were cases where the id was unknown and 
+the plant was labeled “unknown #1”. This was not acceptable to the SPI database, 
+so an identification was given to the level it was known which was sometimes 
+as vague as *Poaceae* (family) or *Dicotyledoneae* (class). 
+It is assumed that a plant was a different species than all the 
+others that were known when it is labelled as “unknown2”
+
+Then the average species richness (at the plot level) for each transect 
+is computed by averaging the species richness over the plots within each transect. 
+This makes an implicit assumption that all transects will have the same set of 
+plots measured over time so that the transect mean richness has roughly the same precision in all transects. 
+If some plots have to be discarded (e.g. due to damage), the analysis will only be approximate, 
+but unless the number of discarded plots is very large (e.g. more than a 1/3), 
+the approximation should be adequate. 
+This makes the unit of the analysis, the transect within each year.
+
+A summary plot of the species richness on each plot is shown in @fig-richness-prelim.
+.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data for mean species richness at the plot level. Each dot represents a plot on the transects."
+#| label: fig-richness-prelim
+#| warning: false
+#| message: false
+# Compute the total richness for each plot in each transect
+#  Analysis of mean plot-level species richness
+#  Only want those species that have cover > 0. Species with cover = 0 are not present.
+
+# Compute the species richness for each plot in each transect
+richness <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","Year","TRANSECT","PLOT"), plyr::summarize,
+                          richness=length(unique(SPECIES_CODE[ PERCENT_COVER > 0])))
+
+# Compute the average richness for each transect so I can plot these over time
+richness.transect <- plyr::ddply(richness, c("STUDY_AREA_NAME","Year","TRANSECT"), plyr::summarize,
+                          richness=mean(richness, na.rm=TRUE))
+
+# Make a preliminary plot of richness by years
+
+prelim.richness.plot <- ggplot(data=richness, aes(x=Year, y=richness, color=TRANSECT, linetype=TRANSECT))+
+   ggtitle("Species richness")+
+   ylab("Species richness")+
+   geom_point(position=position_dodge(width=.2))+
+   geom_line(data=richness.transect)+
+   scale_x_continuous(breaks=min(richness$Year, na.rm=TRUE):max(richness$Year, na.rm=TRUE))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)
+prelim.richness.plot 
+ggsave(plot=prelim.richness.plot, 
+       file=paste(file.prefix,'-richness-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+
+```
+
+
+Notice that there is evidence of a transect effect, 
+where, for example, the species richness on some transects tends to be
+higher than at the other transects because of local transect-specific conditions (e.g. better soil).
+
+A linear mixed model regression can be used to look for changes over time using the model
+$$\mathit{Richness} = \mathit{Year} + \mathit{TransectF(R)}+ \mathit{YearF(R)}$$
+where
+
+- $\mathit{Richness}$ the mean species richness for a transect in a year; 
+- $\mathit{TransectF}$ represents the (random) transect effect; 
+- $\mathit{YearF}$ represents the year-specific effects (process error); and 
+- $\mathit{Year}$ represents the calendar year trend over time.  
+
+Plants on a plot are a mixture of annuals, 
+biennials and perennials so the year-specific effects 
+may vary by species and so in the context of total richness, 
+the year-specific effects are an average over all species. 
+
+The summarized data on species richness is:
+
+```{r}
+#| echo: false
+richness.transect
+```
+
+
+These models are fit using the *lmer()* functions in *R*
+and results summarized in @fig-richness-summary.
+
+
+
+
+```{r}
+#| echo: false
+# This is a regression analysis with Year as the trend variable and Transect as a random effects.
+# We need to account for the same transect (and plots) being measured over time.
+# Because this is a linear mixed model and the because the total richness is typically large enough, no transformation
+# is needed.
+richness.fit.pvalue   <- NA  # in case model fails
+richness.fit.slope    <- NA
+richness.fit.slope.se <- NA
+
+# define the YearF effect for process error (year specific effcts)
+richness.transect$YearF      <- factor(richness.transect$Year)
+richness.transect$TransectF  <- factor(richness.transect$TRANSECT)
+
+if(n.transects >1){
+  richness.fit <-  lmerTest::lmer(richness ~ Year + (1|TransectF) + (1|YearF), data=richness.transect)
+  anova(richness.fit,dfm='Kenward-Roger')
+  summary(richness.fit)
+  #VarCorr(richness.fit)
+
+  richness.fit.pvalue   <- anova(richness.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
+  richness.fit.slope    <- fixef(richness.fit)[2]
+  richness.fit.slope.se <- sqrt(diag(vcov(richness.fit)))[2]
+}
+if(n.transects==1){
+  richness.fit <-  lm(richness ~ Year, data=richness.transect)
+  anova(richness.fit)
+  summary(richness.fit)
+  #VarCorr(richness.fit)
+
+  richness.fit.pvalue   <- anova(richness.fit)[1,"Pr(>F)"]
+  richness.fit.slope    <- coef(richness.fit)[2]
+  richness.fit.slope.se <- sqrt(diag(vcov(richness.fit)))[2]
+}
+```
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in species richness."
+#| label: fig-richness-summary
+#| warning: false
+#| message: false
+
+# extract the slope
+richness.slopes <- data.frame(
+       STUDY_AREA_NAME = richness.transect$STUDY_AREA_NAME[1],
+       slope           = richness.fit.slope,
+       slope.se        = richness.fit.slope.se,
+       p.value         = richness.fit.pvalue, 
+       #r2             = summary(richness.fit)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+#richness.slopes
+
+
+# compute the fitted values from the model
+richness.fitted <- data.frame(
+                 STUDY_AREA_NAME=richness.transect$STUDY_AREA_NAME[1],
+                 Year=seq(min(richness$Year, na.rm=TRUE),max(richness$Year, na.rm=TRUE), .1),
+                 stringsAsFactors=FALSE)
+if(n.transects >1)richness.fitted$pred.mean <- predict(richness.fit, newdata=richness.fitted,type="response", re.form=~0)
+if(n.transects==1)richness.fitted$pred.mean <- predict(richness.fit, newdata=richness.fitted,type="response")
+#head(richness.fitted)
+
+# Plot with trend line 
+richness.plot.summary <- ggplot2::ggplot(data=richness,
+                                    aes(x=Year, y=richness))+
+   ggtitle("Total Species richness")+
+   ylab("Total % richness")+
+   geom_point(size=3, aes(color=TRANSECT),position=position_dodge(w=0.2))+
+   geom_line(data=richness.fitted, aes(x=Year,y=pred.mean))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=min(richness$Year, na.rm=TRUE):max(richness$Year,na.rm=TRUE))+
+   geom_text(data=richness.slopes, aes(x=min(richness$Year, na.rm=TRUE), y=max(richness$richness, na.rm=TRUE)), 
+             label=paste("Slope : ",round(richness.slopes$slope,2), 
+                         " ( SE "  ,round(richness.slopes$slope.se,2),")",
+                         " p :"    ,round(richness.slopes$p.value,3)),
+                         hjust="left")
+richness.plot.summary
+ggsave(plot=richness.plot.summary, 
+       file=paste(file.prefix,'-richness-plot-summary-lmer.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+@fig-richness-summary shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend. With 
+`r length(unique(veg.df$Year))` years of data, 
+the estimated slope is 
+`r try(round(richness.fit.slope,3), silent=TRUE)` 
+(SE `r try(round(richness.fit.slope.se,3), silent=TRUE)`) specues richness/year 
+(`r try(insight::format_p(richness.fit.pvalue), silent=TRUE)`).
+
+
+
+
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots for the analysis of species richness "
+#| label: fig-richness-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plot 
+if(n.transects >1)diag.plot <- sf.autoplot.lmer(richness.fit)  # residual and other diagnostic plots
+if(n.transects==1)diag.plot <-    autoplot     (richness.fit)
+plot(diag.plot)
+ggplot2::ggsave(plot=diag.plot, 
+                file=paste(file.prefix,"-richness-residual-lmer-plot.png",sep=""),
+                h=6, w=6, units="in", dpi=300)
+
+```
+
+
+Residual plots are presented in @fig-richness-resid.
+With only `r length(unique(veg.df$Year))` years of data, 
+the plots are not very informative.
+The plots are not very informative. 
+In the upper left corner is a plot of residuals vs. the fitted values. 
+A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot of the residual. 
+Points should be close to the solid reference line. 
+Fortunately, the analysis is fairly robust against non-normality of the residuals 
+(and in fact makes no assumption of normality) so only extreme departures are worrisome. 
+The bottom left plot examines the distribution of the year-specific effects. 
+As expected the effects are small (all of the dots are close to 0). 
+The bottom right plot examine looks at the distribution of the random effect of transect. 
+With only a few transects the plot is not very informative, 
+but the fact that the 95% confidence interval for each random 
+effect does not richness 0 indicates evidence of a transect effect (this is not surprising).  
+
+It will also be possible to covariates such as soil condition in a 
+transect to try and explain some of the variation over 
+time using a multiple regression. 
+With only `r length(unique(veg.df$Year))`
+years of data available, this not sensible.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# check for autocorrelation - look at the average residual over time
+# check for autocorrelation - look at the average residual over time
+if(n.transects >1)richness.transect$resid <- richness.transect$richness - predict(richness.fit, newdata=richness.transect, re.form=~0)
+if(n.transects==1)richness.transect$resid <- richness.transect$richness - predict(richness.fit, newdata=richness.transect)
+mean.resid <- plyr::ddply(richness.transect, "Year", summarize, mean.resid=mean(resid))
+resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+richness.dwres1 <- car::durbinWatsonTest(resid.fit)
+#dwres1
+richness.dwres2 <- lmtest::dwtest(resid.fit)
+#dwres2
+
+
+```
+
+Whenever an analysis of a trend over time is conducted, the analysis 
+should test and adjust for autocorrelation. 
+Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
+The test for autocorrelation commonly used is the Durbin-Watson test and we find
+`r try(insight::format_p(richness.dwres1$p), silent=TRUE)` for the test of no autocorrelation.
+
+
+In this example, species richness in individual plots was over 10 and 
+no transformation will be needed. 
+However, if the species richness values are very small (on the order of 5 or less with many zeros in plots), 
+Poisson regression should be used as shown in other protocols.
+
+A potential weakness of this approach is that richness if computed for each plot separately. 
+So two plots each with completely different set of species would have the 
+same plot richness, but the richness for the entire transect would be much higher. 
+The next section indicates ways to deal with this problem. 
+
+
+
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+## Diversity
+
+Species richness is one measure of diversity and there are many more such as 
+Simpson’s or Shannon’s measure of diversity. 
+A similar analysis as for species richness can be done on these other measures of 
+diversity, but are no longer recommended because these measures are 
+often insensitive to big changes in diversity and because they do not account for 
+functional similarity among species. 
+For example, the diversity of six dramatically different species of 
+plants is considered to be no more diverse than six related species.
+
+Leinster and Cobbold (2012) showed how different diversity 
+measures all belong to a continuum (called a diversity profile) 
+and how species similarity can be used to augment the standard diversity measures. 
+The diversity profile also has a number of advantages over the traditional 
+measures of diversity as noted by Chao and Jost (2013) and Jost (2013).
+
+The key difficulty with traditional measures of diversity is that there is 
+non-linear relationship between the diversity measure and biological implications. 
+For this reason, it is often useful to think in terms of “effective number of species” 
+(Jost, 2006; Jost 2013). 
+Briefly, the effective number of species is the number of 
+equally abundant species that give rise to a particular diversity index value. 
+
+Jost (2013) provides an example of the problems with traditional diversity measures:
+
+> “… suppose you are comparing the diversity of aquatic microorganisms before and after an oil spill. 
+> You wouldn't want to measure that diversity by species richness because even 
+> a massive toxic event is sure to leave a few vagrant individuals of each pre-spill species, 
+> and species richness doesn't distinguish between one individual of Species X or a million; 
+> the pre- and post-spill species counts might not be very different, 
+> even if the pre- and post-spill species frequencies are very different. 
+> So if you are a good traditional biologist you might use the popular Gini-Simpson diversity index, 
+> which is  $1-\sum_i{p_i^2}$
+> where $p_i$  is a measure of relative abundance for species i. 
+> Suppose that the pre-spill Gini-Simpson index is .99 and the post-spill index is .97. 
+> If you are a good traditional biologist you would figure out that 
+> this drop is statistically significant, but you would conclude that the magnitude of the drop is small. 
+> You might even say  (very wrongly) that the diversity has dropped by 2%,
+> which sounds like a small drop, nothing to worry about.
+>
+> The error which virtually all biologists make is that the Gini-Simpson index 
+> is not itself a diversity, and is highly nonlinear. 
+> The pre-spill community with a Gini-Simpson index of 0.99 has the same diversity 
+> as a community of 100 equally-common species. 
+> The post-spill community with a Gini-Simpson index of  0.97 has the same diversity 
+> as a community of 33 equally-common species. 
+> The difference between the pre-and post-spill diversities is in fact enormous. 
+> The drop in diversity is 66%, not 2%! 
+> This is not just a matter of different definitions of diversity, as some people would like to say. 
+> Rather, it is a matter of the indices being nonlinear with respect to our intuitive concept of diversity.”
+
+Leinster and Cobbold (2012) defined the diversity profile as series of “effective numbers” 
+dependent on an index $q$ (which ranges from 0 to infinity) and a similarity matrix $\bf{Z}$ 
+(whose $(i,j)$ entry measures the similarity of species $i$ and species $j$ from 0 (not similar) 
+to 1 (completely similar)). The diversity profile is computed as:
+$$^{q}D^Z(\bf{p})= \left( {\sum {p_i(\bf{Zp})^{q-1}_i}} \right) ^{1/(1-q)}$$
+where the vector $\bf{p}$ is the relative abundance of the species present 
+(i.e., excluding species with 0 abundance), and $\bf{Z}$ is the similarity matrix 
+among the vector of species. 
+As shown by Leinster and Cobbold (2012), many of the common diversity indices are special 
+cases of the above. For example, if $q = 0$, the above equation reduces to species richness; 
+if $q = 1$ and $\bf{Z}=\bf{I}$, then the above is related to the Shannon Index; 
+and if $q=2$ and $\bf{Z}=\bf{I}$, then the above is related to the Simpson Index of diversity.
+
+The $\b{Z|$ matrix (measure of similarity) resolves a number of problems 
+with the common diversity measures. If two species are virtually identical 
+(entries of $\bf{Z}$ close to 1), then the diversity measure above effectively treats them equivalently as a single species. 
+The difficulty, is of course, defining this similarity matrix.
+
+I’ve included a briefing note on the analysis of diversity in 
+an environmental impact assessment case with this material 
+as illustration of the method. 
+For the rest of this section, the diversity measures will be computed assuming a 
+diagonal $\bf{Z}$ matrix, i.e. every species is functionally distinct which is obviously incorrect. 
+
+@fig-dp-prelim shows the diversity profiles for each transect for each year in the study.
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: true
+#| include: true
+
+# We construct the diversity profile for each transect in each year by summing
+# the % cover over all the plots in a transect year
+cover.transect <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","Year","TRANSECT","SPECIES_CODE"),
+                              plyr::summarize,  cover=sum(PERCENT_COVER, na.rm=TRUE))
+#head(cover.transect)
+
+# We need to make each transect have cover for ALL possible species in the overall database
+
+cover.transect <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME"), function (x){
+   # extract all possible combination of year and species and transect and expand each transect
+   trans.sp.year <- expand.grid(STUDY_AREA_NAME=unique(x$STUDY_AREA_NAME),
+                                SPECIES_CODE        =unique(x$SPECIES_CODE),
+                                Year           =unique(x$Year),
+                                TRANSECT       =unique(x$TRANSECT), stringsAsFactors=FALSE)
+   x <- merge(x, trans.sp.year, all=TRUE)
+   x$cover[ is.na(x$cover)] <- 0
+   x
+})
+cover.transect$SA.Y.T <- paste0(cover.transect$STUDY_AREA_NAME,"...",cover.transect$Year,"...",cover.transect$TRANSECT)
+
+# remove any year.transect that has 0 cover in total
+total.cover <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","Year","TRANSECT"), plyr::summarize,
+                           total.cover=sum(cover, na.rm=TRUE))
+total.cover <- total.cover[ total.cover$total.cover > 0,]
+
+if(nrow(total.cover)==0){
+   cat("**** ERROR **** all of the transects have 0 cover, so cannot proceed\n")
+   knitr::knit_exit()
+}
+```
+
+
+```{r}
+#| echo: false
+#| fig-cap: "An illustration of the diversity profiles for each transect in each year. The effective number of species when q = 0 is equivalent to simple species richness; when q = 1 this is related to the Shannon Index of diversity; when q = 2 this is related to the Simpson Index of diversity. As values of q increase more weight is given to common species. As value of q move towards 0, more weight is given to rare species."
+#| label: fig-dp-prelim
+#| warning: false
+#| message: false
+#| include: false
+
+total.cover$SA.Y.T <- paste0(total.cover$STUDY_AREA_NAME,"...",total.cover$Year,"...",total.cover$TRANSECT)
+
+
+cover.transect <- cover.transect[ cover.transect$SA.Y.T %in% total.cover$SA.Y.T,]
+
+# Sort the data by species
+cover.transect <- cover.transect[ order(cover.transect$STUDY_AREA_NAME,
+                                        cover.transect$Year,
+                                        cover.transect$TRANSECT,
+                                        cover.transect$SPECIES_CODE),]
+
+# We dont have information on the Z matrix (species similarity) so we will
+# use the default which is diagonal.
+profiles <- ddply(cover.transect, c("STUDY_AREA_NAME","Year","TRANSECT"), function(x){
+     cat('Profile computatations for ', unlist( x[1,1:3]), "\n")
+     profile <- div.profile(x$cover)
+     profile
+})
+
+
+# Plot the profiles
+plot.profile <- ggplot2::ggplot(data=profiles, aes(x=q, y=diversity, color=TRANSECT, linetype=factor(Year) ))+
+  ggtitle("Diversity profiles")+
+  ylab("Effective number of species")+
+  xlab("q")+
+  geom_line()+
+  facet_wrap(~STUDY_AREA_NAME, ncol=1)+
+  scale_linetype_discrete(name="Year")
+plot.profile
+ggsave(plot=plot.profile, 
+       file=paste(file.prefix,'-diversity-profiles.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+```
+
+
+Once the diversity profiles have been computed, 
+the effective number of species for any value of $q$ can be extracted and analyzed 
+in the same way as the analysis for the average species richness.
+
+For example, here are the extracted diversity values for $q = 2$ which is related to the Simpson Index of diversity:
+
+```{r}
+#| echo: false
+
+# Extract the value of effective number of species for q=2 and do the analysis
+diversity.transect <- profiles[ profiles$q==2.0,]
+#diversity.transect
+temp <- diversity.transect
+temp$diversity <- round(temp$diversity, 1)
+print(temp, row.names=FALSE)
+```
+
+A summary plot of the effective number of species over time: is shown in @fig-diversity-prelim2.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the effective number of species for q of 2."
+#| label: fig-diversity-prelim2
+#| warning: false
+#| message: false
+
+prelim.diversity.plot <- ggplot(data=diversity.transect, aes(x=Year, y=diversity, color=TRANSECT, linetype=TRANSECT))+
+   ggtitle(paste("Effective number of species at q = ", format(diversity.transect$q[1],nsmall=2),sep=""))+
+   ylab("Effective number of species")+
+   geom_point(position=position_dodge(width=.2))+
+   geom_line(data=diversity.transect)+
+   scale_x_continuous(breaks=min(diversity.transect$Year, na.rm=TRUE):max(diversity.transect$Year, na.rm=TRUE))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1)
+prelim.diversity.plot 
+ggsave(plot=prelim.diversity.plot, 
+       file=paste(file.prefix,'-diversity-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+
+```
+
+
+Notice that there is evidence of a transect effect, 
+where, for example, the effective number of species on some transects tends to be
+higher than at the other transects because of local transect-specific conditions (e.g. better soil).
+
+A linear mixed model regression can be used to look for changes over time using the model
+$$\mathit{EffectiveSpecies} = \mathit{Year} + \mathit{TransectF(R)}+ \mathit{YearF(R)}$$
+where
+
+- $\mathit{EffectiveSpecies}$ the mean species diversity for a transect in a year; 
+- $\mathit{TransectF}$ represents the (random) transect effect; 
+- $\mathit{YearF}$ represents the year-specific effects (process error); and 
+- $\mathit{Year}$ represents the calendar year trend over time.  
+
+Plants on a plot are a mixture of annuals, 
+biennials and perennials so the year-specific effects 
+may vary by species and so in the context of total diversity, 
+the year-specific effects are an average over all species. 
+
+
+These models are fit using the *lmer()* functions in *R*
+and results summarized in @fig-diversity-summary2.
+
+```{r}
+#| echo: false
+if(length(unique(diversity.transect$Year))<3){
+   cat("\n\n***** Insufficient number of years to do diversity analysis. Here is the data ****\n")
+   diversity.transect
+   #knitr::knit_exit()
+}
+
+```
+
+
+
+```{r}
+#| echo: false
+
+# This is a regression analysis with Year as the trend variable and Transect as a random effects.
+# We need to account for the same transect (and plots) being measured over time.
+# Because this is a linear mixed model and the because the total diversity is typically large enough, no transformation
+# is needed.
+
+diversity.fit.pvalue   <- NA # in case model fails
+diversity.fit.slope    <- NA
+diversity.fit.slope.se <- NA
+
+
+# define the YearF effect for process error (year specific effcts)
+diversity.transect$YearF    <- factor(diversity.transect$Year)
+diversity.transect$TransectF<- factor(diversity.transect$TRANSECT)
+#diversity.transect
+
+if(n.transects >1){
+  diversity.fit <-  lmerTest::lmer(diversity ~ Year + (1|TransectF) + (1|YearF), data=diversity.transect)
+  anova(diversity.fit,dfm='Kenward-Roger')
+  #VarCorr(diversity.fit)
+
+  diversity.fit.pvalue   <- anova(diversity.fit, ddfm="Kenward-Roger")[1,"Pr(>F)"]
+  diversity.fit.slope    <- fixef(diversity.fit)[2]
+  diversity.fit.slope.se <- sqrt(diag(vcov(diversity.fit)))[2]
+}
+if(n.transects ==1){
+  diversity.fit <-  lm(diversity ~ Year , data=diversity.transect)
+  anova(diversity.fit)
+  #VarCorr(diversity.fit)
+
+  diversity.fit.pvalue   <- anova(diversity.fit)[1,"Pr(>F)"]
+  diversity.fit.slope    <- coef(diversity.fit)[2]
+  diversity.fit.slope.se <- sqrt(diag(vcov(diversity.fit)))[2]
+}
+```
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the trend in species diversity (effective number of species)."
+#| label: fig-diversity-summary2
+#| warning: false
+#| message: false
+
+# extract the slope
+diversity.slopes <- data.frame(
+       STUDY_AREA_NAME = diversity.transect$STUDY_AREA_NAME[1],
+       slope           = diversity.fit.slope,
+       slope.se        = diversity.fit.slope.se,
+       p.value         = diversity.fit.pvalue, 
+       #r2             = summary(diversity.fit)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+#diversity.slopes
+
+
+# compute the fitted values from the model
+diversity.fitted <- data.frame(
+                 STUDY_AREA_NAME=diversity.transect$STUDY_AREA_NAME[1],
+                 Year=seq(min(diversity.transect$Year, na.rm=TRUE),max(diversity.transect$Year, na.rm=TRUE), .1),
+                 stringsAsFactors=FALSE)
+if(n.transects >1)diversity.fitted$pred.mean <- predict(diversity.fit, newdata=diversity.fitted,type="response", re.form=~0)
+if(n.transects==1)diversity.fitted$pred.mean <- predict(diversity.fit, newdata=diversity.fitted,type="response")
+#head(diversity.fitted)
+
+# Plot with trend line 
+diversity.plot.summary <- ggplot2::ggplot(data=diversity.transect,
+                                    aes(x=Year, y=diversity))+
+   ggtitle(paste("Effective number of species at q =", format(diversity.transect$q[1],nsmall=2),sep=""))+
+   ylab("Effective number of species")+
+   geom_point(size=3, aes(color=TRANSECT),position=position_dodge(w=0.2))+
+   geom_line(data=diversity.fitted, aes(x=Year,y=pred.mean))+
+   facet_wrap(~STUDY_AREA_NAME, ncol=1, scales="free" )+
+   scale_x_continuous(breaks=min(diversity.transect$Year, na.rm=TRUE):max(diversity.transect$Year,na.rm=TRUE))+
+   geom_text(data=diversity.slopes, aes(x=min(diversity.transect$Year, na.rm=TRUE), y=max(diversity.transect$diversity, na.rm=TRUE)), 
+             label=paste("Slope : ",round(diversity.slopes$slope,2), 
+                         " ( SE "  ,round(diversity.slopes$slope.se,2),")",
+                         " p :"    ,round(diversity.slopes$p.value,3)),
+                         hjust="left")
+diversity.plot.summary
+ggsave(plot=diversity.plot.summary, 
+       file=paste(file.prefix,'-diversity-plot-summary-lmer.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+
+
+```
+
+@fig-diversity-summary2 shows a summary plot, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend. With 
+`r length(unique(veg.df$Year))` years of data, 
+the estimated slope is 
+`r try(round(diversity.fit.slope,3), silent=TRUE)` 
+(SE `r try(round(diversity.fit.slope.se,3), silent=TRUE)`) specues diversity/year 
+(`r try(insight::format_p(diversity.fit.pvalue), silent=TRUE)`).
+
+
+
+
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots for the analysis of species diversity "
+#| label: fig-diversity-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plot 
+if(n.transects >1)diag.plot <- sf.autoplot.lmer(diversity.fit)  # residual and other diagnostic plots
+if(n.transects==1)diag.plot <-    autoplot     (diversity.fit)  # residual and other diagnostic plots
+plot(diag.plot)
+ggplot2::ggsave(plot=diag.plot, 
+                file=paste(file.prefix,"-diversity-residual-lmer-plot.png",sep=""),
+                h=6, w=6, units="in", dpi=300)
+
+```
+
+
+Residual plots are presented in @fig-diversity-resid.
+With only `r length(unique(veg.df$Year))` years of data, 
+the plots are not very informative.
+The plots are not very informative. 
+In the upper left corner is a plot of residuals vs. the fitted values. 
+A good plot will show a random scatter around 0. 
+Any large deviations from 0 should be investigated as potential outliers. 
+In the upper right is a normal probability plot of the residual. 
+Points should be close to the solid reference line. 
+Fortunately, the analysis is fairly robust against non-normality of the residuals 
+(and in fact makes no assumption of normality) so only extreme departures are worrisome. 
+The bottom left plot examines the distribution of the year-specific effects. 
+As expected the effects are small (all of the dots are close to 0). 
+The bottom right plot examine looks at the distribution of the random effect of transect. 
+With only a few transects the plot is not very informative, 
+but the fact that the 95% confidence interval for each random 
+effect does not diversity 0 indicates evidence of a transect effect (this is not surprising).  
+
+It will also be possible to covariates such as soil condition in a 
+transect to try and explain some of the variation over 
+time using a multiple regression. 
+With only `r length(unique(veg.df$Year))`
+years of data available, this not sensible.
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# check for autocorrelation - look at the average residual over time
+# check for autocorrelation - look at the average residual over time
+if(n.transects >1)diversity.transect$resid <- diversity.transect$diversity - predict(diversity.fit, newdata=diversity.transect, re.form=~0)
+if(n.transects==1)diversity.transect$resid <- diversity.transect$diversity - predict(diversity.fit, newdata=diversity.transect)
+mean.resid <- plyr::ddply(diversity.transect, "Year", summarize, mean.resid=mean(resid))
+resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+diversity.dwres1 <- car::durbinWatsonTest(resid.fit)
+#dwres1
+diversity.dwres2 <- lmtest::dwtest(resid.fit)
+#dwres2
+
+
+```
+
+Whenever an analysis of a trend over time is conducted, the analysis 
+should test and adjust for autocorrelation. 
+Autocorrelation usually isn’t a problem (and likely cannot be detected) unless you have 10+ years of data. 
+The test for autocorrelation commonly used is the Durbin-Watson test and we find
+`r try(insight::format_p(diversity.dwres1$p), silent=TRUE)` for the test of no autocorrelation.
+
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+
+## Species turn over and nestedness
+
+Cover and diversity measures may not capture species turn over. 
+For example, cover and diversity could remain the same, while a entirely new set of 
+species replaces existing species.
+
+Collins et al. (2017) decomposed compositional changes over time in 
+components due to nestedness or turnover. 
+Nestedness measures dissimilarity in species composition relative to the first year 
+of the study and is due to plots in later years containing fewer species than the 
+plot in the first year of measurement. 
+Turnover measures dissimilarity in species composition relative to the first 
+year of the study due to plot in later years containing new species not found in the first year of measurement.
+
+These measures are computed for each plot on each transect. 
+First, for each plot for each year, the percentage of cover is translated into a presence/absence score 
+(presence if the % cover >0). 
+Let 
+
+- $a$ = number of species appears on the plot in the first year and in year $k$;
+- $b$ = number of species occurring in the first year but not in year $k$; and 
+- $c$ = the number of species occurring in year $k$ but not in year $1$. 
+
+Then three measures of dissimilarity are computed
+
+$$\beta_{sor} = \frac{b+c}{2a+b+c} $$
+$$\beta_{sim} = \frac{min(b,c)}{a+min(b,c)}$$
+$$\beta_{nest} = \beta_{sor} - \beta_{sim}$$
+
+$\beta_{sor}$  accounts for the total difference in species composition between the two years;
+$\beta_{sim}$ accounts only for the lower component. 
+For example, if the same set of species were present in both years, 
+then $b=c=0$ and all three indices are zero. If some species simply vanish (but no new species arrive) 
+then $b$ = the number of species that disappear, $a$ = number of species that persist; and $c$ = 0 and $\beta_{sim}=0$
+while the two other components are non-zero. 
+If some species are new in year $k$ but no species disappears, then $b=0$ and again $\beta_{sim}=0$. 
+Only if there is turnover, i.e., some species disappear and other species take their place, 
+do we get a non-zero value for  $\beta_{sim}$.
+
+The values of the three indices were found for each plot in year 
+subsequent to the first year the transect was measured. A minimum of 4 years of data are required.
+The mean dissimilarity measure over all plots within a transect was computed to get a measure 
+for each transect for each year as shown in @fig-betadiversity-prelim.
+
+```{r}
+#| echo: false
+#| error: true
+
+if(length(unique(veg.df$Year))<4){
+   cat("At least 4 years of data are needed to compute species turnover trends\n")
+   knitr::knit_exit()
+   stop()
+}
+```
+
+```{r}
+#| echo: false
+#| fig-cap: "Three dissimilarity measures (relative to the first year of measurement) The beta.sor measures total change over time; beta.sim measures turn over (species dropping out and being replaced); beta.sne measures nestedness (species persisting over time). Note that beta.sim + beta.sne = beta.sor."
+#| label: fig-betadiversity-prelim
+#| warning: false
+#| message: false
+
+
+# Convert long format to wide format for each plot/transect combination
+
+veg.wide <- reshape2::dcast(veg.df, STUDY_AREA_NAME+TRANSECT+PLOT+Year~SPECIES_CODE, sum,
+                            value.var="PERCENT_COVER", fill=0)
+# impute a zero for any missing percent covers
+veg.wide[ is.na(veg.wide)] <- 0
+
+# Compute the distances for turnover and nestedness for each transect-year combination comparing to the first 
+# years data.
+# Then do a regression these over time
+
+dissim.transect <- ddply(veg.wide, c("STUDY_AREA_NAME","TRANSECT"), function (x){
+    # Convert the species percent cover to presence/absence
+    species.names <- names(x)
+    species.names <- names(x)[ !names(x) %in% c("STUDY_AREA_NAME","TRANSECT","PLOT","Year")]
+
+    # Compute the dissimiarlity for each plot in subsequent years relative to the first year the
+    # plot was measured. Then average these diversity measures over the plots within a transect
+    # first convert to presence/absence data
+    x[, species.names] <- as.numeric( x[,species.names] > 0) # cover to presence absence
+    plot.level <- plyr::ddply(x, "PLOT", function(x, species.names){
+         first.year <- x[ which.min(x$Year),]
+         diffs <- ddply(x, "Year", function(x,first.year,species.names){
+            #browser()
+            dissim <- betapart::beta.pair( rbind(first.year[, species.names,drop=FALSE],
+                                                 x[,species.names,drop=FALSE]))
+            dissim <- unlist(dissim)
+            data.frame(betatype=names(dissim), dissim=dissim)
+         },first.year=first.year, species.names=species.names)
+    }, species.names=species.names)
+    #browser()
+    # drop the first years
+    first.year <- min(x$Year)
+    plot.level <- plot.level[ plot.level$Year != first.year,]
+    mean.dissim <- plyr::ddply(plot.level, c("Year","betatype"), plyr::summarize, mean.dissim = mean(dissim))
+    mean.dissim
+})
+dissim.transect
+
+# Make a preliminary plot of dissimilarity by years
+
+prelim.dissim.plot <- ggplot(data=dissim.transect, aes(x=Year, y=mean.dissim, color=TRANSECT, linetype=TRANSECT))+
+   ggtitle("Mean dissimiarity relative to first year")+
+   ylab("Mean dissimilarity relative to first year")+
+   geom_point(position=position_dodge(width=.2))+
+   geom_line()+
+   scale_x_continuous(breaks=min(dissim.transect$Year, na.rm=TRUE):max(dissim.transect$Year, na.rm=TRUE))+
+   facet_wrap(~interaction(STUDY_AREA_NAME,betatype,sep=" "), ncol=2, scales="free_y")+
+   theme(legend.position = c(1, 0), legend.justification = c(1, 0)) 
+prelim.dissim.plot 
+ggsave(plot=prelim.dissim.plot, 
+       file=paste(file.prefix,'-dissim-plot-prelim.png',sep=""),
+       h=6, w=6, units="in",dpi=300)
+```
+
+The values for each transect are then regressed over time. 
+Notice that you need at least 4 years of measurements because each year 
+is compared to the first year which leave 3 dissimilarity values 
+which is the minimum needed for a regression analysis.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+dissim.transect$YearF      <- factor(dissim.transect$Year)
+dissim.transect$TransectF  <- factor(dissim.transect$TRANSECT)
+
+
+# Fit a line through each dissimilarity measured
+fits <- plyr::dlply(dissim.transect, c("betatype"), function(x){
+   cat("\n\n\n*** Starting analysis on beta diversity type ", x$betatype[1],  "\n")
+   dissim.transect <- x
+
+   dissim.fit.lmer <-  
+   dissim.fit.lmer <- tryCatch(
+        {
+            lmerTest::lmer(mean.dissim ~ Year + (1|TransectF) + (1|YearF), data=dissim.transect)
+        },
+        error=function(cond) {
+            cat(paste("Model could not not be fit"))
+            # Choose a return value in case of error
+            return(NULL)
+        }#,
+        #warning=function(cond) {
+        #    cat(paste("Model had a warning"))
+        #    return(NULL)
+        #}
+    )    
+   
+   #print(anova(dissim.fit.lmer,dfm='Kenward-Roger'))
+   #print(summary(dissim.fit.lmer))
+   #print(VarCorr(dissim.fit.lmer))
+   list(STUDY_AREA_NAME =x$STUDY_AREA_NAME[1],
+        betatype=x$betatype[1], 
+        fit=dissim.fit.lmer)
+})
+```
+
+A linear mixed model is fit as in the previous sections to 
+account for the evident transect effect. 
+Residual plots and tests for autocorrelation are similar to previous sections. 
+The final summary plot is shown in @fig-betadiversity-summary.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of changes in species compositions over time. The beta.sor measures total change over time; beta.sim measures turn over (species dropping out and being replaced); beta.sne measures nestedness (species persisting over time). Note that beta.sim + beta.sne equals beta.sor."
+#| label: fig-betadiversity-summary
+#| warning: false
+#| message: false
+
+
+# extract the slope
+
+dissim.slopes <- ldply(fits, function(x){
+  if(!is.null(x$fit)){ 
+    dissim.transect <- x$fit@frame # get the data
+    dissim.fit.lmer <- x$fit
+  #browser()
+    data.frame(
+       STUDY_AREA_NAME = x$STUDY_AREA_NAME,
+       slope           = fixef(dissim.fit.lmer)["Year"],
+       slope.se        = summary(dissim.fit.lmer)$coefficients["Year","Pr(>|t|)"],
+       p.value         = summary(dissim.fit.lmer)$coefficients[row.names(summary(dissim.fit.lmer)$coefficients)=="Year"  ,"Pr(>|t|)"], 
+       #r2             = summary(dissim.fit.lmer)$r.squared,  # not defined for mixed effect models
+       stringsAsFactors=FALSE)
+  }
+})
+
+
+# compute the fitted values from the model
+dissim.fitted <- plyr::ldply(fits, function(x){
+   if(!is.null(x$fit)){
+     dissim.fit.lmer <- x$fit
+     dissim.transect <- x$fit@frame
+     dissim.fitted <- data.frame(
+                 STUDY_AREA_NAME=x$STUDY_AREA_NAME[1],
+                 Year=seq(min(dissim.transect$Year, na.rm=TRUE),max(dissim.transect$Year, na.rm=TRUE), .1),
+                 stringsAsFactors=FALSE)
+     dissim.fitted$pred.mean <- predict(dissim.fit.lmer, newdata=dissim.fitted,type="response", re.form=~0)
+     dissim.fitted
+   }
+})
+#head(dissim.fitted)
+
+# Plot with trend line 
+dissim.plot.summary <- ggplot2::ggplot(data=dissim.transect,
+                                    aes(x=Year, y=mean.dissim))+
+   ggtitle("Mean dissimilarity relative to first year")+
+   ylab("Mean disssimilarity relative to first year")+
+   geom_point(size=3, aes(color=TRANSECT),position=position_dodge(w=0.2))+
+   geom_line(data=dissim.fitted, aes(x=Year,y=pred.mean))+
+   facet_wrap(~interaction(STUDY_AREA_NAME,betatype,sep=" "), ncol=2, scales="free_y")+
+   theme(legend.position = c(1, 0), legend.justification = c(1, 0))+ 
+   scale_x_continuous(breaks=min(dissim.transect$Year, na.rm=TRUE):max(dissim.transect$Year,na.rm=TRUE))+
+   geom_text(data=dissim.slopes, aes(x=min(dissim.transect$Year, na.rm=TRUE), y=max(dissim.transect$mean.dissim, na.rm=TRUE)), 
+             label=paste("Slope : ",round(dissim.slopes$slope,2), 
+                         " ( SE "  ,round(dissim.slopes$slope.se,2),")",
+                         " p :"    ,round(dissim.slopes$p.value,3)),
+                         hjust="left")
+dissim.plot.summary
+ggsave(plot=dissim.plot.summary, 
+       file=paste(file.prefix,'-dissim-plot-summary-lmer.png',sep=""),
+       h=6, w=6, units="in", dpi=300)
+
+```
+
+
+@fig-betadiversity-summary shows  summary plots, along with estimates of the slope, its standard error,
+and the p-value of the hypothesis of no trend. With 
+`r length(unique(veg.df$Year))` years of data, 
+the estimated slopes are
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated autocorrelation"
+
+
+temp <- dissim.slopes
+temp$p.value <- insight::format_p(temp$p.value)
+
+ft <- flextable(temp)
+
+ft <- colformat_double(ft, j="slope",    digits=2)
+ft <- colformat_double(ft, j="slope.se", digits=2)
+ft <- set_header_labels(ft, "betatype"="Beta type","slope"="Slope", 
+                            "slope.se"="SE", "p.value"="P-value")
+ft <- set_table_properties(ft, layout = "autofit")
+ft <- set_caption(ft, caption="Estimated slope for trends in beta diversity measures.")
+ft
+```
+
+The model diagnostic plots are:
+
+```{r}
+#| echo: false
+#| fig-cap: "Model fit diagnostic plots for the analysis of beta diversity "
+#| label: fig-betadiversity-resid
+#| warning: false
+#| message: false
+
+# Look at the residual plot 
+plyr::l_ply(fits, function(x){
+   if(!is.null(x$fit)){
+     cat("\n\n\n*** Generating diagnostic plots for beta diversity type ", x$betatype[1],  "\n")
+     dissim.fit.lmer <- x$fit
+   
+     diag.plot <- sf.autoplot.lmer(dissim.fit.lmer)  # residual and other diagnostic plots
+     grid.arrange(top=paste("Beta diversity type ", x$betatype[1]), diag.plot)
+     #plot(diag.plot)
+     ggplot2::ggsave(plot=diag.plot, 
+                file=paste(file.prefix,"-dissim-residual-lmer-plot-",x$betatype,".png",sep=""),
+                h=6, w=6, units="in", dpi=300)
+  }
+})
+
+```
+
+
+The estimates of autocorrelation are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# check for autocorrelation - look at the average residual over time
+bd.ac <- plyr::ldply(fits, function (x){
+   if(!is.null(x$fit)){
+     #cat("\n\n\n*** Testing for autocorrelation for beta diversity type ", x$betatype[1],  "\n")
+     #browser()
+     dissim.fit.lmer <- x$fit
+     dissim.transect <- x$fit@frame
+     dissim.transect$resid <- dissim.transect$mean.dissim - predict(dissim.fit.lmer, newdata=dissim.transect, re.form=~0)
+     mean.resid <- plyr::ddply(dissim.transect, "Year", summarize, mean.resid=mean(resid))
+     resid.fit <- lm( mean.resid ~ 1, data=mean.resid)
+     beta.dwres1 <- car::durbinWatsonTest(resid.fit)
+     #print(beta.dwres1)
+     #beta.dwres2 <- lmtest::dwtest(resid.fit)
+     #print(beta.dwres2)
+     data.frame(ac=beta.dwres1$r,
+              ac.p.value=insight::format_p(beta.dwres1$p))
+   }
+})
+
+
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| tbl-cap: "Estimated autocorrelation"
+#| 
+ft <- flextable(bd.ac)
+ft <- colformat_double(ft, j="ac", digits=2)
+ft <- set_header_labels(ft, "betatype"="Beta type","ac"="Autocorrelation", "ac.p.value"="P-value")
+ft <- set_table_properties(ft, layout = "autofit")
+ft <- set_caption(ft, caption="Estimated autocorrelation")
+ft
+```
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+# Power analysis
+
+A power/sample size analysis was conducted to determine the number of years of sampling needed to detect
+changes over time. The steps in the power/sample size analysis are:
+
+- Compute a single number summarizing the response at this site in each year. The mean % total cover is computed at the
+transect level and must be averaged over transects.
+
+
+- Analyze the log(mean response) using a simple linear regression. This will give an estimate of the combined year-specific and sampling variation
+around regression line (overall sd).
+- Use the overall SD to estimate power and sample size requirements.
+
+Here are the overall means for each year for each response:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+
+# get the mean cover per plot per yer
+# get the mean values of 1 number per site per year
+cover <- plyr::ddply(veg.df, c("STUDY_AREA_NAME","Year","TRANSECT","PLOT"), plyr::summarize,
+                          cover=sum(PERCENT_COVER, na.rm=TRUE))
+
+# Compute the average total cover for each transect so I can plot these over time
+cover.transect <- plyr::ddply(cover, c("STUDY_AREA_NAME","Year","TRANSECT"), plyr::summarize,
+                          cover=mean(cover, na.rm=TRUE))
+cover.transect
+
+cover.mean <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                          cover=mean(cover, na.rm=TRUE))
+cover.mean$Mean.response<- cover.mean$cover
+cover.mean$Response     <- "Mean total cover"
+
+
+richness.mean <- plyr::ddply(richness.transect,c("STUDY_AREA_NAME","Year"), plyr::summarize,
+                             richness=mean(richness))
+richness.mean$Mean.response <- richness.mean$richness
+richness.mean$Response      <- "Mean richness"
+
+
+diversity.mean <- plyr::ddply(diversity.transect,c("STUDY_AREA_NAME","Year","q"), plyr::summarize,
+                             diversity=mean(diversity))
+diversity.mean$Mean.response <- diversity.mean$diversity
+diversity.mean$Response      <- paste0("Mean diversity: q=", diversity.mean$q)
+
+all.resp <- plyr::rbind.fill(cover.mean, richness.mean, diversity.mean)
+all.resp$cover          <- NULL
+all.resp$richness       <- NULL
+all.resp$diversity      <- NULL
+all.resp$q              <- NULL
+all.resp
+
+```
+
+The above data needs to be checked if there are any suspicious values.  
+
+We use the *lm()* function to fit linear regression over time on the log(scale) and obtain the combined year-specific effect (process error) 
+plus sampling variation standard deviation (@tbl-resid-sd).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| tbl-cap: "Estimated residual (process + sampling) standard deviation"
+#| label: tbl-resid-sd
+
+# if any of the values are zero, add a small offset
+#all.resp <- plyr::ddply(all.resp, "Response", function(x){
+#     offset <- min(x$Mean.response[x$Mean.response>0]) *.5
+#     x$Mean.response <- x$Mean.response + offset
+#     x
+#})
+
+# fit a regression line on the log(scale) and get the residual sd
+residual.sd <- plyr::ddply(all.resp, "Response", function(x){
+    fit <- lm(log(Mean.response) ~ Year, data=x)
+    sd  <- summary(fit)$sigma
+    data.frame(sd=sd)
+})
+
+ft <- flextable(residual.sd)
+ft <- width(ft, j=1, width=2)
+ft <- width(ft, j=2, width=2)
+ft <- colformat_double(ft, j=2, digits=4)
+ft <- set_header_labels(ft, values = list(sd="Process + sampling SD"))
+ 
+ft
+```
+
+This is then used to estimate the power to detect various proportional changes over time (@fig-power).
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| error: true
+#| fig-cap: "Estimated power to detect proportional changes over time"
+#| label: fig-power
+
+# remove any missing values for resid.sd
+residual.sd <- residual.sd[!is.na(residual.sd$sd),]
+
+# estimate power at changes of 0 to .10/year with sample sizes of 5 to 20 years for each response
+scenarios <- expand.grid(n.years=seq(5,20,1),
+                         slope  =seq(0, .1, .02))
+power.detect <- plyr::ddply(residual.sd, "Response", function(x, scenarios){
+   
+   power <- plyr::adply(scenarios,1, function(scenario,x){
+      #browser()
+      power <- slr.power.stroup(Trend=scenario$slope,
+                                Xvalues=1:scenario$n.years,
+                                Process.SD=x$sd,
+                                Sampling.SD=0)
+      power
+   },x=x)
+}, scenarios=scenarios)
+
+ggplot(data=power.detect, aes(x=n.years, y=power.2s, color=as.factor(slope)))+
+   ggtitle("Estimated power", subtitle="alpha=0.05")+
+   geom_point()+
+   geom_line()+
+   facet_wrap(~Response, ncol=1)+
+   ylab("Power")+xlab("Number of years in the study")+
+   scale_color_discrete(name="Proportional\nyearly\nslope")+
+   xlim(0,NA)+ylim(0,1)+
+   geom_hline(yintercept=0.8)
+
+```
+ 
+The proportional yearly slope indicates the effect size of interest. For example, a value
+of .02 would indicated a 2% change/year in the mean response.
+ 
+In cases of high variability, the power is uniformly low 
+to detect the yearly proportion change over time. 
+In cases of low variability, power is uniformly very high
+to detect the yearly proportion change over time.
+
+
+
+```{r}
+#| echo: false
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------
+```
+
+# Summary
+
+A key feature of this protocol is that the transect is the analysis unit 
+and individual plots are pseudo-replicates within a transect (Hurlbert, 1984). 
+It is not wise to treat the individual plots as analysis units because they may not be 
+independent due to transect-specific factors (such as aspect) that affect all 
+of the plots within the transect simultaneously. 
+If plots are treated as the analysis unit, then typically, the residual variation is underestimated, 
+reported standard errors of estimates are too small, and reported p-values are too small 
+leading to too many false positive results.
+
+There are several measures that can be monitored over time. 
+Among the simplest are simple averages of total % cover or plot-level species richness. 
+
+Species richness is one of many measures of diversity. 
+Recent work has places it and other measures on a continuum where the effective number 
+of species (also called the Hill number) is a more sensible measure of diversity. 
+This can account for both the relative abundance of species and also their functional similarity. 
+The latter (the Z matrix above) needs to be developed to effectively use these newer methods for diversity.
+
+Beta diversity and ordination methods are usually used when community structures 
+are measured across a gradient (e.g. environmental gradient) and the relationship 
+between the community structure and the environmental variables are of interest. 
+This does not appears to be of of interest here and are not pursued. 
+But changes in beta diversity over time can be partitioned into species persistence (nestedness) 
+and species turnover (species being lost and replaced) using presence/absence data 
+related to the percentage cover. 
+At least 4 sample events will be needed for trend analysis because each 
+sampling event is compared to the species present in the first year of sampling.
+
+
+
+# References
+
+Chao, A. and Jost, L. (2013). Diversity Analysis. Chapman and Hall.
+
+Collins, et. al. (2017). 
+Fragmentation affects plant community composition over time. 
+Ecography, 40, 119-140.
+
+Jost, L. (2013). Effective number of species. 
+Available at http://www.loujost.com/Statistics%20and%20Physics/Diversity%20and%20Similarity/EffectiveNumberOfSpecies.htm. Downloaded 2013-12-10.
+
+Kuznetsova A, Brockhoff PB, Christensen RHB (2017). 
+lmerTest Package: Tests in Linear Mixed Effects Models.
+Journal of Statistical Software, 82, 1-26. 
+doi:10.18637/jss.v082.i13
+
+Leinster, T. and Cobbold, C. A. (2012). 
+Measuring diversity: the importance of species similarity. 
+Ecology, 93, 477-489.
+
+R Core Team (2022). R: A language and environment for statistical computing. 
+R Foundation for Statistical Computing, Vienna, Austria. 
+https://www.R-project.org/.
+
+Warton, D.I. and Hui, F.K.C. (2010) 
+The Arcsine Is Asinine: The Analysis of Proportions in Ecology. 
+Ecology, 92, 3-10.
