@@ -1,0 +1,907 @@
+---
+title: "Fitting Trends in Complex Study Designs"
+date: '`r format(Sys.time(), "%Y-%m-%d")`'
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# Illustrative example of fitting trends with a complex design
+
+# Fixed monitoring sites are established in a monitoring site. 
+# These fixed monitoring stations are repeated measured over time.
+# Multiple measurements on each station are taken in each year.
+
+set.seed(32343344)
+
+library(ggplot2)   # for plotting
+library(plyr)      # split-apply-combine paradigm
+library(reshape2)  # for melting
+library(lmerTest)  # for a linear mixed model with p-values
+library(emmeans)   # for comparing the trends
+
+
+# Create some fake data to illustrate the fitting concepts
+
+gen.study.data<- function(Study.Area,
+                           nTransects, nMeasurements,  nYears, 
+                          sdTransects,sdMeasurements, sdYears,
+                          beta0, beta1){
+  # Generate the random effects
+  eff.Process   <- rnorm(nYears,     mean=0, sd=sdYears)
+  eff.Transect  <- rnorm(nTransects, mean=0, sd=sdTransects)
+  eff.Measurement<-rnorm(nYears*nTransects*nMeasurements, mean=0, sd=sdMeasurements)
+
+  sim.data <- expand.grid(Study.Area=Study.Area, 
+                          Year=1:nYears, 
+                          Transect=1:nTransects, 
+                          Measurement=1:nMeasurements, stringsAsFactors=FALSE)
+  sim.data$Y <- beta0+ beta1*sim.data$Year  # generate the base trend
+  sim.data$Y <- sim.data$Y + eff.Process [sim.data$Year]
+  sim.data$Y <- sim.data$Y + eff.Transect[sim.data$Transect]
+  sim.data$Y <- sim.data$Y + eff.Measurement
+  sim.data
+}
+
+sdTransects    <- 4
+sdMeasurements <- 2
+sdYears        <- 3
+
+beta0 <- 20
+beta1 <- -0.5
+
+sim.data.A <- gen.study.data(Study.Area='A',
+                              nTransects=2,  nMeasurements=3,  nYears=10,
+                             sdTransects=sdTransects, sdMeasurements=sdMeasurements, sdYears=sdYears,
+                             beta0=beta0, beta1=beta1)
+
+
+
+# Create factors
+sim.data.A$TransectF <- factor(sim.data.A$Transect)
+sim.data.A$YearF     <- factor(sim.data.A$Year)
+
+# Compute the average of each transect in each year
+transect.mean <- plyr::ddply(sim.data.A, c("Year","Transect","TransectF"), plyr::summarize, mean.Y = mean(Y))
+```
+
+
+# Introducton 
+Many of the designs in the LTEM have a common structure of a site 
+measured over time with fixed transects (or stations) repeatedly measured in multiple years. 
+Multiple measurments can also be taken on each transect. 
+For example, in the vegetation protocol, two transects are established on the site and 10 
+fixed plots are measured on each transect repeatedlt over time. 
+In the berry protocol, bushes are tagged, and multiple stems on each bush are repeated measured over time.
+
+This can be represented diagrammatically in @fig-trend10.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Illustration of several sources of variation in a complex study design"
+#| label: fig-trend10
+#| 
+# Initial plot
+plot.prelim <- ggplot2::ggplot(data=sim.data.A, aes(x=Year, y=Y, color=TransectF, linetype=TransectF))+
+  ggtitle("Illustration of the various sources of variation")+
+  geom_point(size=2, position=position_dodge(w=0.1))+
+  geom_line(data=transect.mean, aes(y=mean.Y))+
+  geom_smooth(method="lm", se=FALSE, color="blue", aes(group=1))+
+  geom_point(data=transect.mean, aes(y=mean.Y), shape="X", size=5, color="black")+
+  scale_x_continuous(breaks=1:10)+
+  ylim(c(5,25))+
+  scale_color_discrete(name="Transect")+
+  scale_linetype_discrete(name="Transect")
+plot.prelim
+```
+
+There are several sources of variation that need to be accounted for when doing the trend analysis:
+
+-	Random variation. This is represented by the variation of the same color dots around the transect mean 
+(denoted by X) for any particular year.
+-	Transect variation. This is represented by the fact that transect 1 is generally higher 
+than transect 2 in all years. 
+The cause of this is typically unknown and due to transect-specific effects 
+such as local conditions at the transect.
+-	Process variation (year-specific variation). 
+This is represented by the fact that the transect means (the X’s) 
+tend to move up or down in any year in tandem. 
+For example, in year 6 both transect means are depressed, while in year 4 both transect means are elevated. 
+The cause of process error (year-specific variation) is unknown, 
+but typically caused by external factors that affect the entire site (and all transects) simultaneously.
+
+Year-specific effects cause a very specific violation of the usual 
+regression assumptions. 
+Usually, in a regression setting repeated values taken in the same year 
+should be approximately scattered about the trend line. 
+However, in some case, year specific factors (e.g., a much wetter year or a much drier year) 
+will force data points to be “clumped” above or below the trend line as illustrated in @fig-trend20.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Conceptualization of process error. Year-specific factors force the individual data points above or below the trend line rather than being centered about the trend line as assumed by regression."
+#| label: fig-trend20
+
+# Create some "data" from the illustration of process error
+set.seed(3243)
+process <- data.frame(Time=1:10)
+process$Mean.response <- 20 - 3*process$Time
+process$Year.Mean     <- process$Mean.response + rnorm(nrow(process), sd=8)
+process.data <- process[ rep(1:nrow(process), each=3),]
+process.data$Y <- process.data$Year.Mean + rnorm(nrow(process.data), sd=1)
+
+ggplot(data=process, aes(x=Time, y=Year.Mean))+
+  ggtitle("Illustration of process and sampling error")+
+  geom_point(size=5, shape="X")+
+  #geom_errorbar(aes(ymin=Year.Mean-2, ymax=Year.Mean+2), width=0)+
+  geom_point(data=process.data, aes(y=Y), position=position_jitter(w=.2))+
+  geom_smooth(method="lm", se=FALSE)+
+  scale_x_continuous(breaks=1:30)+
+  ylab("Response")+
+  xlab("Time\nX indicates mean of values within a year")+
+  annotate("text", label="Process variation\n(year-to-year)", x=9, y=15, hjust=.5)+
+  annotate("segment", x=8, y=15, xend=6.4, yend=7.7, arrow=arrow(type = "closed", length = unit(0.02, "npc")))+
+  annotate("text", label='}', x=6.4, y=7.7, size=20, hjust=1)+
+  annotate("segment", x=8, y=15, xend=8.4, yend=-3, arrow=arrow(type = "closed", length = unit(0.02, "npc")))+
+  annotate("text", label='}', x=8.4, y=-3, size=15, hjust=1)+
+  annotate("text", label='Sampling variation\n(within year)', x=5, y=-5, hjust=0.5)+
+  annotate("segment", x=5, y=-5, xend=4.4, yend=-8, arrow=arrow(type = "closed", length = unit(0.02, "npc")))+
+  annotate("text", label="}", x=4.2, y=-8, size=12, jhust=1)+
+  annotate("segment", x=5, y=-5, xend=6.7, yend=-2, arrow=arrow(type = "closed", length = unit(0.02, "npc")))+
+  annotate("text", label="{", x=6.8, y=-1.5, size=12, jhust=1)
+```
+
+# Accounting for Transect  and Year-specific effects
+
+A naïve analysis would fit a simple regression through all 10 x 2 x 3 = 60 data points, 
+but this type of data violates a key assumption of regression analysis. 
+A key assumption in regression analysis is that all data points in a year are 
+centered about the trend line as shown in @fig-trend30.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Illustration of data that meets regression assumptions"
+#| label: fig-trend30
+#| 
+#------------------------------------------------------------
+# Make a plot showing the key assumption of regression analysis:
+sim.data.A$Y2 <- beta0+ beta1*sim.data.A$Year  # generate the base trend
+sim.data.A$Y2 <- sim.data.A$Y2 + rnorm(nrow(sim.data.A), mean=0, sd=sqrt(sdMeasurements^2+sdTransects^2+sdMeasurements^2))
+
+
+transect.mean2 <- plyr::ddply(sim.data.A, c("Year","Transect","TransectF"), summarize, mean.Y2 = mean(Y2))
+
+plot.prelim2 <- ggplot2::ggplot(data=sim.data.A, aes(x=Year, y=Y2, color=TransectF, linetype=TransectF))+
+  ggtitle("Illustration of data that meets the regression assumptions")+
+  geom_point(size=2, position=position_dodge(w=0.1))+
+  geom_line(data=transect.mean2, aes(y=mean.Y2))+
+  geom_smooth(method="lm", se=FALSE, color="blue", aes(group=1))+
+  geom_point(data=transect.mean2, aes(y=mean.Y2), shape="X", size=5, color="black")+
+  scale_x_continuous(breaks=1:10)+
+  scale_color_discrete   (name="Transect")+
+  scale_linetype_discrete(name="Transect")
+plot.prelim2
+```
+
+Now there is no consistent pattern of one transect tending to always be 
+higher/lower than the other transect, nor is there any evidence of a 
+year-specific effect (process error) where by points are uniformly shifted upwards or downwards.
+
+Ignoring year-specific effects (or process error) is a common error in fitting trends over time. 
+If a naïve fit is done to the data in @fig-trend10, 
+the following results are obtained from using the lm() function in R
+
+> naive.fit <- lm(Y ~ Year, data=sim.data)
+
+it gives the following (incorrect) results
+
+```{r}
+#| echo: false
+# do a naive fit
+naive.fit <- lm(Y ~ Year, data=sim.data.A)
+anova(naive.fit)
+summary(naive.fit)$coefficients
+
+naive.slope <- coef(naive.fit)[2]
+naive.slope.se <- sqrt(diag(vcov(naive.fit)))[2]
+naive.slope.p  <- summary(naive.fit)$coefficients[2, "Pr(>|t|)"]
+```
+
+The estimated slope is 
+`r round(naive.slope,2)` (SE `r round(naive.slope.se,2)`, `r insight::format_p(naive.slope.p)`). 
+The naïve analyst believes that there is very strong evidence that the slope is negative.
+
+There are two ways to properly analyze such data. 
+
+First, if the data are perfectly balanced (i.e., every transect measured every year, 
+and every transect measured the same number of times in each year), 
+then a simple analysis simply analyzes the average reading per year, 
+i.e., average all of the data in a year and do the regression simply on the averaged points as shown
+in @fig-trend40.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Illustration of analysis on the yearly averages"
+#| label: fig-trend40
+#| 
+#------------------------------------------------------------
+
+# do a fit on the averages
+sim.data.avg <- plyr::ddply(sim.data.A, c("Year"), summarize, mean.Y = mean(Y))
+plot.avg <- ggplot2::ggplot(data=sim.data.avg, aes(x=Year, y=mean.Y))+
+  ggtitle("Illustration of analysis on average of each year's data")+
+  geom_point(size=2, position=position_dodge(w=0.1))+
+  geom_smooth(method="lm", se=FALSE, color="blue", aes(group=1))+
+  scale_x_continuous(breaks=1:10)+
+  ylim(c(5,25))
+plot.avg
+```
+
+This gives:
+
+```{r}
+#| echo: true
+avg.fit <- lm(mean.Y ~ Year, data=sim.data.avg)
+```
+
+
+```{r}
+#| echo: false
+anova(avg.fit)
+summary(avg.fit)$coefficients
+
+avg.slope <- coef(avg.fit)[2]
+avg.slope.se <- sqrt(diag(vcov(avg.fit)))[2]
+avg.slope.p  <- summary(avg.fit)$coefficients[2, "Pr(>|t|)"]
+```
+
+The estimated slope is the same as in the naïve fit, but the (correct) standard error is much larger 
+(`r round(avg.slope.se,2)` rather than `r round(naive.slope.se,2)`) 
+and the p-value for the slope is not as extreme (`r insight::format_p(avg.slope.p)` rather than
+`r insight::format_p(naive.slope.p)`).
+
+At first glance, it appears that we have “thrown away” much information. 
+In fact we have not. 
+A key determinant for determining a trend is the number of years of sampling – 
+not how much sampling is done in each year. 
+Here the number of years of sampling is 10 and the slope is determined by the 
+contrast in the MEAN Y value across these 10 values. 
+The variation within a year provides no information on the trend – 
+rather it provides information on transect-to-transect variation 
+(and if it is consistent over time) and measurement error variation which also provides no information on the trend.
+
+The variation in the mean response above is also much less than the 
+variation in the individual data points around the regression line. 
+Hence, averaging does toss out information, but summarizes it in a 
+form most appropriate for a trend analysis. 
+The variation of the mean response around the regression line is a 
+combination of process error, average transect variation, and average measurement variation and captures all three sources of variation.
+
+So if the design is balanced, a simple analysis simply computes the mean 
+response in each year and performs a regression analysis on the mean response. 
+There is no loss of information.
+
+But, it is unlikely that the LTEM will have perfectly balanced data after many years of 
+monitoring. 
+For example, in the berry protocol, plants will be replaced; 
+in the vegetation protocol, some plots may be removed because of damage to the plot.
+
+In these cases, a more complex analysis method is needed, the linear mixed model. 
+A linear mixed model consists of two parts. First, is the structural portion, 
+what is the proposed trend – in this case, it is a trend over time. 
+Second, are the random effects for the sources of variation (identified earlier) 
+being an effect for the transect and an effect for the year. 
+Notice that the effect of year occurs in both the structural and random parts – 
+consequently, most statistical packages require a second copy of the year 
+variable to be made and defined as a factor to serve as the random effect of year. 
+The random effect of measurement error is implicit. 
+
+The *lmerTest* package in *R* can be used to fit linear mixed models as follows:
+
+```{r}
+#| echo: true
+
+# do a fit on the individual values accounting for random effects
+sim.data.A$TransectF <- factor(sim.data.A$Transect)
+sim.data.A$YearF     <- factor(sim.data.A$Year)
+
+re.fit <- lmerTest::lmer(Y~ Year + (1|TransectF) + (1|YearF), data=sim.data.A)
+```
+
+This gives the ANOVA table
+
+```{r}
+#| echo: false
+anova(re.fit, dfm='Kenward-Roger')
+```
+and estimated coefficients
+
+```{r}
+#| echo: false
+summary(re.fit)
+```
+
+and finally estimates of the variance components
+
+```{r}
+#| echo: false
+VarCorr(re.fit)
+```
+
+The structural portion of the model is specified as *Y ~ Year* as before. 
+The random effects are specified as *(1|TransectF)* + *(1|YearF)* where the *TransectF* and *YearF*
+variables are defined as factors. 
+The model will account automatically for unbalanced data as long as the transect labels 
+are unique for each transect and not reused, i.e., if transect 1 is replaced, do NOT call the replacement transect as transect 1. 
+Instead, refer to it as transect 3 (assuming that two transects were originally planned).
+
+The slope under this more complex model matches that from the simple analysis 
+on the mean response each year. 
+It will differ if the design is unbalanced, but unless the imbalance is severe, the differences will be slight.
+
+It turns out that fitting linear mixed models is quite difficult for small 
+sample sizes and the *lmerTest()* approach may fail to converge and provide estimates 
+of the trend with standard errors/p-values. 
+In these cases, better starting values for the process may be required. 
+It may be simpler to just do the approximate analysis on the averages.
+
+Process error (year specific effect) also impacts the power to detect effects.
+Consider the @fig-trend60 where the impact of process error on estimating the trend line is illustrated.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Illustration of two regression situations without (top panel) and with (bottom panel) process error."
+#| label: fig-trend60
+#| 
+
+# Create some "data" from the illustration of time trend, with and without process error 
+set.seed(222343)
+
+process1 <- data.frame(Time=1:10)
+process1$Mean.response <- 20 - 5*process1$Time
+process1$Year.Mean     <- process1$Mean.response + rnorm(nrow(process1), sd=5)
+process1$Source  <- "NO process error"
+
+process2 <- process1
+process2$Mean.response <- 20 - 5*process2$Time
+process2$Year.Mean     <- process2$Mean.response + rnorm(nrow(process2), sd=50)
+process2$Source <- "WITH process error"
+process <- rbind(process1, process2)
+
+ggplot(data=process, aes(x=Time, y=Year.Mean))+
+  ggtitle("Illustration of process and sampling error")+
+  geom_point(size=2)+
+  geom_errorbar(aes(ymin=Year.Mean-10, ymax=Year.Mean+10), width=0)+
+  geom_smooth(method="lm", se=TRUE)+
+  scale_x_continuous(breaks=1:30)+
+  ylab("Response")+
+  facet_wrap(~Source, ncol=1)+
+  geom_hline(yintercept=mean(process1$Mean.response), color="red")
+
+```
+
+In the top panel, there are no year-specific effects (no process error) 
+and the average value of Y changes over time based on the underlying trend with 
+the mean yearly values of Y falling close to the underlying trend line.
+Only sampling variation (measurement error) is present so 95% of the confidence 
+intervals computed each year based on the yearly measurements each year will 
+overlap with the underlying trend line. 
+The uncertainty is small about the overall trend, and there is 
+clear evidence that the trend is different from a 0 trend (which is shown by the horizontal line). 
+
+In the bottom panel, the year-specific effects (process error) 
+add extra variation to the underlying response each year due to effects such as weather, food etc. 
+Now, the 95% confidence intervals for the mean response still provide valid estimates 
+for the yearly mean response values, but now may not overlap the true underling trend (in dashed). 
+The fitted line will still be unbiased for the true trend (solid line), 
+but the extra variation makes the uncertainty in the fitted line much 
+larger and now there is no evidence that the trend line differs from 0.
+
+If there is substantial year-specific effects (process error), 
+then performing more sampling in a year will NOT be helpful. 
+Taking more measurements in a year will shrink the size of the confidence intervals 
+in the bottom panel above, but has NO impact on the process error and so the 
+variation around the fitted line will only be reduced slightly. 
+In cases of substantial process error, the limiting factor for 
+detecting trends is likely to be the total years of sampling, and not the number of measurements taken in a year.
+
+
+```{r}
+#| echo: false
+#####################################################################################################3
+#####################################################################################################3
+#####################################################################################################3
+#####################################################################################################3
+```
+
+
+# Multi-site analyses – comparing trends
+
+In a multi-site analysis, the focus is now on comparing the trends 
+across multiple study area. For example, you may wish to compare 
+the trend in two different study area that differ in the amount of human impact.
+
+The principle method for comparing trends is a statistical technique 
+called Analysis of Covariance (ANCOV). This is patterned against ANOVA method for 
+comparing mean – the ANCOVA compares the impacts (the trend) of the covariates (in this case, the impact of time).
+
+The data now consists of measurement on multiple transects within 
+each study area over time. An illustration of the data is shown in @fig-trend100:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Illustration of analysis for multi-site studies"
+#| label: fig-trend100
+#| 
+#------------------------------------------------------------
+
+set.seed(97937344)
+
+gen.study.data2<- function(nStudy.Areas,
+                           nTransects, nMeasurements,  nYears, 
+                          sdTransects,sdMeasurements, sdYears,
+                          beta0, beta1){
+  # Generate the random effects
+  eff.Process   <- rnorm(nYears,     mean=0, sd=sdYears)
+  eff.Transect  <- rnorm(nTransects*nStudy.Areas,   mean=0, sd=sdTransects)
+  eff.Measurement<-rnorm(nStudy.Areas*nYears*nTransects*nMeasurements, mean=0, sd=sdMeasurements)
+
+  sim.data <- expand.grid(Study.Area=1:nStudy.Areas, 
+                          Year=1:nYears, 
+                          Transect=1:nTransects, 
+                          Measurement=1:nMeasurements, stringsAsFactors=FALSE)
+  sim.data$Y <- beta0[sim.data$Study.Area]+ beta1[sim.data$Study.Area]*sim.data$Year  # generate the base trend
+  sim.data$Y <- sim.data$Y + eff.Process [sim.data$Year]
+  sim.data$Y <- sim.data$Y + eff.Transect[(sim.data$Study.Area-1)*nTransects + sim.data$Transect]
+  sim.data$Y <- sim.data$Y + eff.Measurement
+  sim.data
+}
+
+
+# Create some fake data to illustrate the fitting concepts
+
+sim.data.B <- gen.study.data2(nStudy.Areas=2,
+                              nTransects=2,  nMeasurements=3,  nYears=10,
+                             sdTransects=sdTransects, sdMeasurements=sdMeasurements, sdYears=sdYears,
+                             beta0=c(20,30), beta1=c(-0.5,-0.7))
+
+
+# Create factors - we need to distinguish between transects with the same label in different study areas
+sim.data.B$Study.Area <- c("A","B")[sim.data.B$Study.Area]
+sim.data.B$TransectF <- factor(interaction(sim.data.B$Study.Area,sim.data.B$Transect))
+sim.data.B$YearF     <- factor(sim.data.B$Year)
+
+
+# Compute the average of each transect in each year
+transect.mean <- plyr::ddply(sim.data.B, c("Study.Area","Year","YearF","Transect","TransectF"), summarize, mean.Y = mean(Y))
+
+
+# Initial plot
+plot.prelim.multisite <- ggplot2::ggplot(data=sim.data.B, aes(x=Year, y=Y, color=Study.Area, linetype=TransectF))+
+  ggtitle("Illustration of the various sources of variation for multi-site studies")+
+  geom_point(size=2, position=position_dodge(w=0.1))+
+  geom_line(data=transect.mean, aes(y=mean.Y))+
+  geom_smooth(method="lm", se=FALSE, color="blue", aes(group=Study.Area))+
+  geom_point(data=transect.mean, aes(y=mean.Y), shape="X", size=5, color="black")+
+  scale_x_continuous(breaks=1:10)
+  #ylim(c(5,25))
+plot.prelim.multisite
+```
+
+There are several sources of variation that need to be accounted 
+for when doing the trend comparison:
+
+-	Random variation. This is represented by the variation of the same 
+color dots around the transect mean (denoted by X) for any particular year.
+-	Transect variation. This is represented by the fact that on transect 
+within each study area is generally higher than the other transect in all years. 
+The cause of this is typically unknown and due to transect-specific effects
+such as local conditions at the transect.
+-	Process variation (year-specific variation). 
+This is represented by the fact that the transect means (the X’s) tend to m
+ove up or down in any year across all study areas in tandem. 
+For example, in year 5, all transect means are elevated, while in year 7 
+all the transect means are depressed. The cause of process error 
+(year-specific variation) is unknown, but typically caused by external 
+factors that affect the entire site (and all transects) simultaneously.
+-	Different trend. There appears to be a slightly different sloe for the two study areas.
+
+A prototype model of a typical ANCOVA analysis (ignoring transect and year-specific factors) is
+seen in @fig-trend110.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Two prototype analyses for ANCOVA"
+#| label: fig-trend110
+#| 
+#--#---------------------------------------
+# Generate the prototype diagrams for ANCOVA
+
+slopes.csv <- textConnection(
+"Model, Study.Area, intercept, slope
+Parallel, A, 30, -.5
+Parallel, B, 20, -.5
+Non-parallel, A, 30, 1
+Non-parallel, B, 35, -1")
+
+slopes <- read.csv(slopes.csv, header=TRUE, as.is=TRUE, strip.white=TRUE)
+#slopes
+
+fake.data <- plyr::ddply(slopes, c("Study.Area","Model"), function(x){
+   fake <- data.frame(Years=1:10)
+   fake$Y <- x$intercept + x$slope*fake$Years + rnorm(10,sd=2)
+   fake
+})
+
+plot.proto <- ggplot(data=fake.data, aes(x=Years, y=Y, color=Study.Area))+
+   ggtitle("Prototype models for ANCOVA")+
+   geom_point()+
+   geom_smooth(method="lm", se=FALSE)+
+   xlim(c(1,10))+
+   #scale_x_continuous(breaks=1:10)+
+   facet_wrap(~Model, ncol=1)
+plot.proto
+```
+
+The statistical model for the (very simple) non-parallel slope case is:
+$$Y \sim StudyArea + Year + StudyArea:Year$$
+where the
+
+- $StudyArea$ term represents different intercepts for the two study areas; 
+- $Year$ term represents the average slope for the study areas; and 
+- $StudyArea:Year$ is an interaction term representing differential slopes for the two study areas.
+
+The statistical model for the (very simple) parallel slope case is similar and simply drops the interaction term
+$$Y \sim StudyArea + Year $$
+A naïve application of these models to the study designs from these 
+protocols would be incorrect for the same reasons as in the single-site case. 
+A linear mixed model must again be fit accounting for transect and year-specific effects. 
+The two models are now:
+
+$$Y \sim StudyArea + Year + StudyArea:Year + TransectF(R) + YearF(R) + YearF:StudyArea(R)$$
+and
+$$Y \sim StudyArea + Year  + TransectF(R) + YearF(R) + YearF:StudyArea(R)$$
+
+respectively with the latter three terms representing the transect 
+and year specific effects that are common and a year-specific effect
+that could be different for each study area. 
+Note that the transect should be uniquely labeled across study area so that 
+transect T1 in study area A is a different transect than transect T1 in study area B. 
+When implementing these models, the transect label is usually recoded as a combination of 
+study area name and transect code (i.e., as transects A.T1 and B.T1) to make them unique. 
+
+There are two ways to properly analyze ANCOVA data with a complex experimental design. 
+
+First, if the data are perfectly balanced (i.e., every transect in each study area 
+is measured every year, and every transect in each study area measured the s
+ame number of times in each year), then a simple analysis simply analyzes the 
+average reading per year, i.e.. average all of the data in a year for each study area,
+and a simple ANOVA analysis can be done. 
+For example, from the first figure of this section, the averaged data and fitted line
+is shown in @fig-trend140:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Analysis on the yearly averages"
+#| label: fig-trend140
+#| 
+#--#---------------------------------------
+# Generate the prototype diagrams for ANCOVA
+
+set.seed(97937344)
+
+gen.study.data2<- function(nStudy.Areas,
+                           nTransects, nMeasurements,  nYears, 
+                          sdTransects,sdMeasurements, sdYears,
+                          beta0, beta1){
+  # Generate the random effects
+  eff.Process   <- rnorm(nYears,     mean=0, sd=sdYears)
+  eff.Transect  <- rnorm(nTransects*nStudy.Areas,   mean=0, sd=sdTransects)
+  eff.Measurement<-rnorm(nStudy.Areas*nYears*nTransects*nMeasurements, mean=0, sd=sdMeasurements)
+
+  sim.data <- expand.grid(Study.Area=1:nStudy.Areas, 
+                          Year=1:nYears, 
+                          Transect=1:nTransects, 
+                          Measurement=1:nMeasurements, stringsAsFactors=FALSE)
+  sim.data$Y <- beta0[sim.data$Study.Area]+ beta1[sim.data$Study.Area]*sim.data$Year  # generate the base trend
+  sim.data$Y <- sim.data$Y + eff.Process [sim.data$Year]
+  sim.data$Y <- sim.data$Y + eff.Transect[(sim.data$Study.Area-1)*nTransects + sim.data$Transect]
+  sim.data$Y <- sim.data$Y + eff.Measurement
+  sim.data
+}
+
+
+# Create some fake data to illustrate the fitting concepts
+
+sim.data.B <- gen.study.data2(nStudy.Areas=2,
+                              nTransects=2,  nMeasurements=3,  nYears=10,
+                             sdTransects=sdTransects, sdMeasurements=sdMeasurements, sdYears=sdYears,
+                             beta0=c(20,30), beta1=c(-0.5,-0.7))
+
+
+# Create factors - we need to distinguish between transects with the same label in different study areas
+sim.data.B$Study.Area <- c("A","B")[sim.data.B$Study.Area]
+sim.data.B$TransectF <- factor(interaction(sim.data.B$Study.Area,sim.data.B$Transect))
+sim.data.B$YearF     <- factor(sim.data.B$Year)
+
+
+# Compute the average of each transect in each year
+transect.mean <- plyr::ddply(sim.data.B, c("Study.Area","Year","YearF","Transect","TransectF"), summarize, mean.Y = mean(Y))
+
+sim.data.avg <- plyr::ddply(sim.data.B, c("Study.Area","Year"), summarize, mean.Y = mean(Y))
+plot.avg.multisite <- ggplot2::ggplot(data=sim.data.avg, aes(x=Year, y=mean.Y,color=Study.Area))+
+  ggtitle("Illustration of multisite analysis on average of each year's data")+
+  geom_point(size=2, position=position_dodge(w=0.1))+
+  geom_smooth(method="lm", se=FALSE, aes(group=Study.Area))+
+  scale_x_continuous(breaks=1:10)
+plot.avg.multisite
+
+```
+
+
+Becase you have averaged the data over all transects in the study area, 
+the non-parallel slope model is simpler:
+$$MeanY \sim StudyArea + Year + StudyAreq:Year + YearF(R)$$
+is fit (using *lmer()*) as in the single-site example. This gives:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Analysis on the yearly averages"
+#| label: fig-trend150
+# do a fit on the averages
+
+sim.data.avg$Study.AreaF <- factor(sim.data.avg$Study.Area)
+sim.data.avg$YearF       <- factor(sim.data.avg$Year)
+
+avg.fit <- lmerTest::lmer(mean.Y ~ Year + Study.AreaF+ Year:Study.AreaF + (1|YearF),
+                          data=sim.data.avg)
+anova(avg.fit, ddf='Kenward-Roger')
+```
+
+The p-value for testing if the slopes are parallel is given by the 
+p-value for the interaction term. 
+In this case, there is some evidence that the slopes are not-parallel.
+
+The estimates of the individual slopes can be obtained from the *emmeans()* package:
+
+```{r}
+#| echo: true
+#| warning: false
+#| message: false
+# Get the individual slopes and the cld
+avg.fit.emmo <- emmeans::emtrends(avg.fit, "Study.AreaF", var="Year")
+multcomp::cld(avg.fit.emmo)
+
+```
+
+
+The estimated slope for study area A is 
+`r round(as.data.frame(avg.fit.emmo)[1,"Year.trend"],2)` (SE `r round(as.data.frame(avg.fit.emmo)[1,"SE"],2)`) 
+and that for study area B is 
+`r round(as.data.frame(avg.fit.emmo)[2,"Year.trend"],2)` (SE `r round(as.data.frame(avg.fit.emmo)[2,"SE"],2)`). 
+The confidence intervals for the slopes overlap considerable. The grouping variable (*.group* column) 
+indicates which study areas appear to have different slopes than other study areas. 
+If a study area has a different grouping code, then there is evidence that 
+its slope is different from slopes in other study areas with a different grouping code.
+
+At first glance, it appears that we have “thrown away” much information. 
+In fact we have not. 
+A key determinant for comparing trends is the number of years of sampling – 
+not how much sampling is done in each year. 
+Here the number of years of sampling is 10 and the individual slopes is 
+determined by the contrast in the MEAN Y value across these 10 values. 
+The variation within a year provides no information on the trend – 
+rather it provides information on transect-to-transect variation (
+and if it is consistent over time) and measurement error variation which also provides no information on the trend.
+
+The variation in the mean response above is also much less than the variation 
+in the individual data points around the regression line. 
+Hence, averaging does toss out information, but summarizes it in a form most appropriate for a trend analysis. 
+The variation of the mean response around the regression line is a 
+combination of process error, average transect variation, and average measurement 
+variation and captures all three sources of variation.
+
+So if the design is balanced, a simple analysis simply computes the mean response 
+in each year and performs a regression analysis on the mean response. There is no loss of information.
+
+But, it is unlikely that the LTEM will have perfectly balanced data after many years 
+of monitoring. For example, in the berry protocol, plants will be replaced; 
+in the vegetation protocol, some plots may be removed because of damage to the plot.
+
+In these cases, the more complex linear mixed model that includes additional interaction terms is needed:
+$$Y \sim StudyArea + Year + StudyArea:Year + TransectF(R) + YearF(R) + YearF:TransectF(R)$$
+The model will account automatically for unbalanced data as long as the 
+transect labels are unique for each transect and not reused, i.e., if transect 1 is replaced, 
+do NOT call the replacement transect as transect 1. 
+Instead, refer to it as transect 3 (assuming that two transects were originally planned).
+
+The *lmerTest* package in *R* can be used to fit this linear mixed models as follows:
+
+```{r}
+#| echo: true
+#| warning: false
+#| message: false
+# do a fit on the individual values accounting for random effects
+sim.data.B$Study.AreaF <- factor(sim.data.B$Study.Area)
+sim.data.B$TransectF   <- factor(interaction(sim.data.B$Study.Area,sim.data.B$Transect))
+sim.data.B$YearF       <- factor(sim.data.B$Year)
+
+re.fit <- lmerTest::lmer(Y~ Study.AreaF + Year + Year:Study.AreaF + 
+                           (1|TransectF) + (1|YearF) + (1|YearF:Study.AreaF), data=sim.data.B)
+```
+
+This gives the ANOVA table:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+anova(re.fit, dfm='Kenward-Roger')
+```
+
+There is slight difference in the interaction p-value because one of 
+the standard deviations was estimated as zero (see below).
+
+The estimated slopes are found as:
+
+```{r}
+#| echo: true
+#| warning: false
+#| message: false
+# Get the individual slopes and the cld
+re.fit.emmo <- emmeans::emtrends(re.fit, "Study.AreaF", var="Year")
+multcomp::cld(re.fit.emmo)
+```
+
+The slope under this more complex model matches that from the simple analysis 
+on the mean response each year. It will differ if the design is unbalanced, 
+but unless the imbalance is severe, the differences will be slight.
+
+The estimates of the standard deviations of the random effects can also be found:
+
+```{r}
+#| echo: true
+#| warning: false
+#| message: false
+# Get the individual slopes and the cld
+VarCorr(re.fit)
+
+```
+
+Here the data does not support year-specific factors that are unique to each study area 
+(the standard deviation of the YearF:Study.AreaF terms are zero). 
+This will give rise to slightly different p-values for certain terms 
+between the simpler and more complex models because of slight differences 
+in the way the degrees of freedom for the test statistics are computed using the Kenward-Roger methods.
+
+It turns out that fitting linear mixed models is quite difficult for 
+small sample sizes and the *lmerTest()* approach may fail to converge 
+and provide estimates of the trend with standard errors/p-values. 
+In these cases, better starting values for the process may be required. 
+It may be simpler to just do the approximate analysis on the averages.
+
+
+
+```{r}
+#| echo: false
+#####################################################################################################3
+#####################################################################################################3
+#####################################################################################################3
+#####################################################################################################3
+```
+
+
+# Transformations
+
+Many of the protocols have counts as a response variable, e.g. number of squirrel calls, 
+number of berries. There are two approaches to dealing with count data.
+
+## Use a regular linear mixed model on the log(counts)
+
+Count data often has two features that make an analysis on the logarithmic scale attractive. 
+First, the variation in the actual data tends to increase with the mean and a 
+logarithmic transform stabilizes the variation. 
+Second, effects often occur on a multiplicative scale, i.e. the trend line is a 
+constant proportional change (e.g., a 5% decline in the mean number of berries per year) 
+rather than a linear change (e.g., 2 fewer berries per year). 
+A proportion change is translated into a linear change after the logarithmic transformation. 
+For example, consider the following plots of a trend on the ordinary and logarithmic scales in @fig-trend400.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Trends on the logarithmic and original scale"
+#| label: fig-trend400
+#| 
+#--------------------------------------------------
+#
+# Proportional change per years
+
+P.effect <- .75
+
+prop.data <- data.frame(Year=1:10) 
+prop.data$Response <- 100 * P.effect^(prop.data$Year-1)
+prop.data$logResponse <- log(prop.data$Response)
+
+prop.data.melt <- reshape2::melt(prop.data,
+                            id.var="Year",
+                            variable.name="Response",
+                            value.name="value")
+response.plot <- ggplot(data=prop.data.melt, aes(x=Year, y=value))+
+   ggtitle("Responses with and without log() transform")+
+   geom_point()+
+   geom_line()+
+   facet_wrap(~Response, scales="free", ncol=1)
+response.plot
+
+```
+
+The upper plot shows a proportional change – year’s value is 0.75 of the previous year’s value. 
+This gives rise to the curved line seen. 
+On the logarithmic scale, the trend is now linear with a constant change per year 
+(on the logarithmic scale) of $log(0.75)=-.28$/year.
+
+Once a linear fit is found on the logarithmic scale, the back transformation can 
+be made and the back transformation shows the trend in the MEDIAN response. 
+When a logarithmic transformation is made, an implicit assumption is that 
+the underlying data (closely) follows a log-normal distribution. 
+The log-normal distribution has long-right tail and the estimated mean 
+on the logarithm scale corresponds to the MEDIAN on the anti-logarithmic scale.
+
+## Use a generalized linear mixed model.
+A common distribution used for count data is the Poisson distribution. 
+Under a Poisson distribution, the variation increases with the mean, 
+and changes over time are often modeled as occurring on the logarithmic scale. 
+The Poisson distribution naturally deals with 0 counts (these are possible under a Poisson model) 
+and it is not necessary to add a small constant to zero counts.
+
+## Which to choose
+
+However, there are many problems in using a generalized linear mixed model 
+that really preclude it from consideration except in special circumstancs.
+
+- If the transect data is a mean over multiple readings, then the response variable is 
+no longer an integer and does NOT follow a Poisson distribution , 
+even if the individual counts followed a Poisson distribution.
+- Many dataset exhibit overdispersion where the variation is actually 
+larger than predicted by a Poisson distribution.
+Adjustments need to be made to account for overdispersion such a random effects for transect and year effects.
+- Model fitting is extremely difficult unless Bayesian methods are used. 
+The *glmer()* function in *R* deals with (quasi)-poisson models but often fails to converge because of sparse data. 
+
+For this reason, I recommend that a standard linear mixed model be used 
+for count data based on the logarithm of the (mean) response.
+
+

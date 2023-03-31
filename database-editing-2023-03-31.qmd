@@ -1,0 +1,1545 @@
+---
+# Database editing
+#
+
+title: "LTEM Database checking" 
+date: today
+date-format: "YYYY-MM-DD"
+execute: 
+  error: true
+format: 
+  html:
+    toc: true
+    number-sections: true
+    self-contained: true
+  pdf:
+    toc: true
+    number-sections: true
+  docx:
+    toc: true
+    number-sections: true
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| include: false
+
+options(width=200)
+
+# load libraries
+library(bcmaps)    # to get the EcoDomains
+library(broom.mixed)# for handling output from lmerTest
+library(car)       # for testing for autocorrelation (2 libraries needed - see dwtest)
+library(emmeans)   # for extracting the individual slopes
+library(flextable) # for tables that look nice
+library(ggfortify) # for residual and other diagnostic plot
+library(ggisotonic)# for power plotting
+library(ggplot2)   # for plotting
+library(insight)   # for formatting p-values
+library(lmtest)    # for testing for autocorrelation
+library(lubridate) # date conversions
+library(plyr)      # for group processing
+library(readxl)    # for opening the Excel spreadsheets and reading off them
+library(sf)
+library(simr)      # for power analysis
+library(lmerTest)  # for the linear mixed modelling
+library(stringr)   # string handling (like case conversion)
+
+# Load some common functions
+source("2022-CommonFiles/common.functions.R")
+source("2022-CommonFiles/read.LTEM.R")
+
+# make the multisite directories
+Plots.dir <- file.path("MultiYear-Plots")
+if(!file.exists(Plots.dir))dir.create(Plots.dir)
+
+```
+
+
+# Amphibians
+
+## Years when each study area was surveyed
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Amphibians", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+user.df <- data.extract$user.data
+user.df$STUDY_AREA_NAME_shrt <- substr(user.df$STUDY_AREA_NAME,1,20)
+
+```
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+addmargins(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass),2)
+```
+
+I don't understand why there are some sites with a large number of records (20+) and some with small numbers of records (1).
+On each transects, some basic information is supposed to be recorded.
+
+**This appears to be an artefact of multiple types of transects (audio or visual) x multiple transects run each year.
+For example, Hai Lake in 2018 has both audio and visual transects run 9 times over the season (see below)
+
+## Number of distinct transects run in each study area.year combination
+
+The number of unique transect names run in each study area.year combination is:
+
+```{r}
+#| echo: false
+
+temp <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","Year"), plyr::summarize,
+                    n.transect.names=length(unique(TRANSECT)))
+xtabs(n.transect.names ~STUDY_AREA_NAME_shrt+Year, data=temp, exclude=NULL, na.action=na.pass)
+
+```
+
+We see that, for example, Hai Lake has 2 different transect names in 2016-2020. When the data is examined more closely,
+these correspond to a visual and an auditory survey. A summary of the unique transect names where there is more than one 
+of them is:
+
+```{r}
+#| echo: false
+
+select <- temp[ temp$n.transect.names >1,]
+select $Study..Year <- paste0(select $STUDY_AREA_NAME_shrt, "..", select $Year)
+user.df$Study..Year <- paste0(user.df$STUDY_AREA_NAME_shrt, "..", user.df$Year)
+
+temp <- user.df[ user.df$Study..Year %in% select$Study..Year,]
+
+dups <- duplicated(temp[,c("STUDY_AREA_NAME","Year","TRANSECT")])
+temp2 <- temp[ !dups,]
+
+temp2 <- temp2[ order(temp2$STUDY_AREA_NAME_shrt, temp2$Year),]
+temp2[, c("STUDY_AREA_NAME_shrt","Year","TRANSECT")]
+
+```
+
+We see, for example, that Hai Lake has both auditory and visual surveys. Mahoney Lake has 2 different auditory surveys plus a visual survey in some years.
+
+## Number of survey dates
+
+In some cases, there are more than one survey date
+
+```{r}
+#| echo: false
+
+temp <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","Year"), plyr::summarize,
+                    n.dates=length(unique(Date)))
+xtabs(n.dates ~STUDY_AREA_NAME_shrt+Year, data=temp, exclude=NULL, na.action=na.pass)
+
+```
+
+We see that, for example, Hai Lake has 5+ dates during the year and Yellow Point has 44 dates in 2021??
+Here is a tabulation of the multiple dates for site-years with multiple dates.
+
+
+```{r}
+#| echo: false
+
+select <- temp[ temp$n.dates >1,]
+select $Study..Year <- paste0(select $STUDY_AREA_NAME_shrt, "..", select $Year)
+user.df$Study..Year <- paste0(user.df$STUDY_AREA_NAME_shrt, "..", user.df$Year)
+
+temp <- user.df[ user.df$Study..Year %in% select$Study..Year,]
+
+dups <- duplicated(temp[,c("STUDY_AREA_NAME","Year","TRANSECT","Date")])
+temp2 <- temp[ !dups,]
+
+temp2 <- temp2[ order(temp2$STUDY_AREA_NAME_shrt, temp2$Year, temp2$Date),]
+temp2[, c("STUDY_AREA_NAME_shrt","Year","TRANSECT","Date")]
+
+```
+
+
+## Version Number of the database
+
+This is important because the fields containing the data vary by version numbers:
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+xtabs(~STUDY_AREA_NAME_shrt+VERSION_NO, data=user.df, exclude=NULL, na.action=na.pass)
+
+```
+
+## Dump of information to see which fields are important
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+user.df <- user.df[ order(user.df$STUDY_AREA_NAME, user.df$Year, user.df$TRANSECT,user.df$SPECIES_CODE),]
+
+temp <- user.df[,c("STUDY_AREA_NAME_shrt","Year","TRANSECT","SPECIES_CODE","EggMasses","Adults",
+           "VERSION_NO","A0","A2","A16","A17","A18","A26",
+                        "A14","A15","A16","A24")]
+temp
+write.csv(temp, file="amphibian-dump.csv", row.names=FALSE, na="")
+
+```
+
+## Missing lat/long information
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude 
+is not available for a record. This needs to be added
+to the record
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+select <- is.na(user.df$LONGITUDE_DD) | is.na(user.df$LATITUDE_DD) 
+
+cat("Total records missing lat/long is ", sum(select), "\n")
+
+cat("\n\nTabulation of where missing lat/long occurs \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+```
+
+
+## Missing ECODOMAIN 
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data so ecodomain could not be determined\n\n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+    cat("\n\n\nSome study areas do not have an ecodomain \n")
+    site.lat.long[ is.na(site.lat.long[is.na(site.lat.long$ECODOMAIN),])]
+    #stop()
+}
+
+
+user.df <- merge(user.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+## Checking species code
+
+### Which species codes are present? 
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=user.df, exclude=NULL, na.action=na.pass)
+```
+
+In some cases, species is NULL and in some cases species is AMPHIBIA. Does NULL species indicate zeros?
+
+### Records with NULL species codes
+
+Data records with missing species codes
+
+```{r}
+#| echo: false
+# records with missing species code
+select <- user.df$SPECIES_CODE == "NULL"
+
+yvars <- c("STUDY_AREA_NAME_shrt","Year", "SPECIES_CODE","TRANSECT","EggMasses","Adults")
+yvars %in% names(user.df)
+temp <- user.df[select, yvars]
+temp <- temp[ order(temp$STUDY_AREA_NAME_shrt, temp$Year, temp$TRANSECT, temp$SPECIES_CODE),]
+temp
+
+```
+
+
+Does this indicate NO eggmasses and adults seen? Why are there multiple records for some study areax year combinations?
+
+### Where do AMPHIBIA species occur?
+
+Tabulation of where AMPHIBI species measured
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+cat("Where AMPIBIIA species measured\n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[!user.df$SPECIES_CODE %in% c("AMPHIBIA"),], exclude=NULL, na.action=na.pass)
+```
+
+Appears to occur inconsistently across the study areas.
+
+
+## Transect
+
+The protocol is supposed to have transect(s) with auditory and/or visual counts. It appears that in some cases, the transect name is the type of survey?
+
+```{r}
+#| echo: false
+temp <- as.data.frame(xtabs(~TRANSECT, data=user.df, exclude=NULL, na.action=na.pass))
+temp
+```
+
+
+```{r}
+#| echo: false
+
+select <- grepl("visual", user.df$TRANSECT, ignore.case=TRUE) |
+          grepl("audit" , user.df$TRANSECT, ignore.case=TRUE)
+xtabs(~STUDY_AREA_NAME_shrt+TRANSECT, data=user.df[select,], exclude=NULL, na.action=na.pass)
+```
+
+## Missing eggmass data or adult counts when species code recorded
+
+If a species code is present, the number of eggmasses should be recorded.
+
+```{r}
+#| echo: false
+select <- user.df$SPECIES_CODE != "NULL" & ( is.na(user.df$EggMasses) | is.na(user.df$Adults))
+user.df[select, yvars]
+
+```
+
+## Distribution of eggmass data
+
+```{r}
+#| echo: false
+ggplot(data=user.df, aes(x=EggMasses))+
+   geom_histogram()
+
+```
+
+```{r}
+#| echo: false
+xtabs(~EggMasses, data=user.df, exclude=NULL, na.action=na.pass)
+
+```
+
+# Check the large values for EggMasses
+
+## Distribution of adults data
+
+```{r}
+#| echo: false
+ggplot(data=user.df, aes(x=Adults))+
+   geom_histogram()
+
+```
+
+```{r}
+#| echo: false
+xtabs(~Adults, data=user.df, exclude=NULL, na.action=na.pass)
+
+```
+
+So little data is recorded that this is unlikely to be useful.
+
+Over 1000 adults recorded in some cases, really?
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+select <- user.df$Adults >= 10 & !is.na(user.df$Adults)
+
+user.df[select,c("STUDY_AREA_NAME_shrt","Year","TRANSECT","SPECIES_CODE","EggMasses","Adults",
+           "VERSION_NO","A16","A17","A18","A26",
+                        "A14","A15","A16","A24")]
+
+```
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+```
+
+# Berries
+
+## Years when each study area was surveyed
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Berries", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+user.df <- data.extract$user.data
+user.df$STUDY_AREA_NAME_shrt <- substr(user.df$STUDY_AREA_NAME,1,20)
+
+```
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+addmargins(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass),2)
+```
+
+
+## Sites with odd numbers of records
+
+Notice that some sites appear to have additional records or missing records, e.g. count is not 20
+
+```{r}
+#| echo: false
+select<- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass))
+select<- select[select$Freq != 20 & select$Freq > 0,]
+
+odd.cases <- merge(user.df, select)  
+cat("Cases with odd Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=odd.cases, exclude=NULL, na.action=na.pass)
+```
+
+## Missing lat/long information
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not available for a record. This needs to be added
+to the record
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+select <- is.na(user.df$LONGITUDE_DD) | is.na(user.df$LATITUDE_DD) 
+
+cat("Total records missing lat/long is ", sum(select), "\n")
+
+cat("\n\nTabulation of where missing lat/long occurs \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+```
+
+**How is it possible that long/lat is not known for some study area?**
+
+## Missing ECODOMAIN 
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data so ecodomain could not be determined\n\n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+    cat("\n\n\nSome study areas do not have an ecodomain \n")
+    site.lat.long[ is.na(site.lat.long[is.na(site.lat.long$ECODOMAIN),])]
+    #stop()
+}
+
+
+user.df <- merge(user.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+## Checking species code
+
+### Which species codes are present? 
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=user.df, exclude=NULL, na.action=na.pass)
+```
+
+**Should this protocol include species that are not SHEPCAN?**
+
+### Records with NULL species codes
+
+Data records with missing species codes
+
+```{r}
+#| echo: false
+# records with missing species code
+select <- user.df$SPECIES_CODE == "NULL"
+
+yvars <- c("STUDY_AREA_NAME_shrt","Year", "SPECIES_CODE","BUSH","STEM","Berry.Count","Branch.Diameter..mm.","Mean.Berry.Weight..gm.")
+yvars %in% names(user.df)
+user.df[select, yvars]
+
+```
+
+**Why is species code NULL?**
+
+### Where do non SHEPCAN species occur?
+
+Tabulation of where non SHEPCAN species measured
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+cat("Where NON SHEPCAN species measured\n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[!user.df$SPECIES_CODE %in% c("SHEPCAN","NULL"),], exclude=NULL, na.action=na.pass)
+```
+
+**Is only SHEPCAN to be analyzed in this document??**
+
+## Berry Weight
+
+### Missing Mean berry weight.
+
+```{r}
+#| echo: false
+
+
+#  Analysis of the mean weight of berries.
+
+# Look at mean weight of berries over time
+# Remember there is only one value per year so we need to extract from the database.
+# We take the mean for each year. 
+
+user.df$Mean.Berry.Weight..gm. <- as.numeric(user.df$Mean.Berry.Weight..gm.)
+
+
+berry.weight <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","SPECIES_CODE","ECODOMAIN","Year"), plyr::summarize, 
+                            Mean.Berry.Weight..gm.   =mean(Mean.Berry.Weight..gm., na.rm=TRUE)
+                            )
+```
+
+The mean berry weight is missing for 
+
+```{r}
+#| echo: false
+
+berry.weight[ is.na(berry.weight$Mean.Berry.Weight..gm.),]
+```
+
+**Why is mean berry weight missing for so many site years?**
+
+### Odd berry weight values
+
+A summary plot of the mean berry weight in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-bweight-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-bweight-prelim
+#| warning: false
+#| message: false
+
+
+prelim.bweight.plot <- ggplot(data=berry.weight, aes(x=Year, y=Mean.Berry.Weight..gm.))+
+   ggtitle("Mean berry weight",
+           subtitle="Each line represents one study area")+
+   ylab("Mean berry weight (g)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.bweight.plot 
+
+```
+
+**Strange value in Coast Mountains ECODOMAIN that needs investigation**
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+select <- (berry.weight$Mean.Berry.Weight..gm. > 2 | berry.weight$Mean.Berry.Weight..gm. == 0 ) & !is.na(berry.weight$Mean.Berry.Weight..gm.)
+yvars <- c("STUDY_AREA_NAME_shrt","Year","SPECIES_CODE","Mean.Berry.Weight..gm.")
+yvars %in% names(berry.weight)
+cat("Very large mean berry weights or berry weights of 0\n")
+berry.weight[select, yvars]
+
+```
+
+
+##  Stem Diameter.
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+user.df$Branch.Diameter..mm. <- as.numeric(user.df$Branch.Diameter..mm.)
+
+temp <- user.df
+temp$STUDY_AREA_NAME <- NULL
+head(temp[,c("STUDY_AREA_NAME_shrt","ECODOMAIN","Year","BUSH","STEM","Branch.Diameter..mm.")])
+
+# make a bush and stem label that is unique to each study area names
+user.df$SA.BUSH <- paste0(user.df$STUDY_AREA_NAME, "....", user.df$BUSH)
+user.df$SA.STEM <- paste0(user.df$STUDY_AREA_NAME, "....", user.df$STEM)
+
+```
+
+### Missing bush/stem values
+
+```{r}
+#| echo: false
+select <- is.na(user.df$BUSH) | is.na(user.df$STEM)
+
+yvars <- c("STUDY_AREA_NAME_shrt","SPECIES_CODE","Year","BUSH","STEM","Branch.Diameter..mm.")
+yvars %in% names(user.df)
+
+user.df[ select, yvars]
+
+```
+
+### Missing branch diameter or value of 0
+
+```{r}
+#| echo: false
+select <- user.df$Branch.Diameter..mm.==0 | is.na(user.df$Branch.Diameter..mm.)
+
+yvars <- c("STUDY_AREA_NAME_shrt","SPECIES_CODE","Year","BUSH","STEM","Branch.Diameter..mm.")
+yvars %in% names(user.df)
+
+user.df[ select, yvars]
+```
+
+### Preliminary plot
+
+A summary plot of the mean stem diameter in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-stemd-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-stemd-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+bush.mean <- plyr::ddply(user.df, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   Branch.Diameter..mm.=mean(Branch.Diameter..mm., na.rm=TRUE))
+
+prelim.stemd.plot <- ggplot(data=bush.mean, aes(x=Year, y=log(Branch.Diameter..mm.)))+
+   ggtitle("Stem diameter data",
+           subtitle="Each line represents one study area")+
+   ylab("log(mean Branch Diameter (mm)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.stemd.plot 
+
+```
+
+**Need to check out the odd value for Coast Mountain stem diameter**.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+select <- bush.mean$Branch.Diameter..mm. < 1 & !is.na(bush.mean$Branch.Diameter..mm. )
+bush.mean[select,]
+
+bad.stemd <- merge(user.df, bush.mean[select,c("STUDY_AREA_NAME","Year")])
+bad.stemd[, yvars]
+```
+
+
+## Berry Count.
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+user.df$Berry.Count <- as.numeric(user.df$Berry.Count)
+
+yvars <- c("STUDY_AREA_NAME_shrt","ECODOMAIN","Year","BUSH","STEM","Berry.Count")
+yvars %in% user.df
+
+head(user.df[,c("STUDY_AREA_NAME_shrt","ECODOMAIN","Year","BUSH","STEM","Berry.Count")])
+
+# make a bush and stem label that is unique to each study area names
+user.df$SA.BUSH <- paste0(user.df$STUDY_AREA_NAME, "....", user.df$BUSH)
+user.df$SA.STEM <- paste0(user.df$STUDY_AREA_NAME, "....", user.df$STEM)
+
+```
+
+Missing values are excluded.
+
+### Missing bush/stem values
+
+```{r}
+#| echo: false
+select <- is.na(user.df$BUSH) | is.na(user.df$STEM)
+
+user.df[ select, yvars]
+
+```
+
+### Missing berry count 
+
+```{r}
+#| echo: false
+select <- is.na(user.df$Berry.Count)
+
+yvars <- c("STUDY_AREA_NAME_shrt","SPECIES_CODE","Year","BUSH","STEM","Berry.Count")
+yvars %in% names(user.df)
+
+user.df[ select, yvars]
+```
+
+### Very large berry count values
+
+Here is a histogram of the berry counts. Some values appear to be very large!
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+ggplot(data=user.df, aes(x=Berry.Count))+
+   geom_histogram()
+```
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+select <-user.df$Berry.Count > 100 & !is.na(user.df$Berry.Count)
+user.df[select, yvars]
+
+```
+
+### Preliminary plot
+
+A summary plot of the mean berry count in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-bcount-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-bcount-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+bcount.mean <- plyr::ddply(user.df, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   mean.Berry.Count=mean(Berry.Count, na.rm=TRUE))
+
+prelim.bcount.plot <- ggplot(data=bcount.mean, aes(x=Year, y=log(mean.Berry.Count)))+
+   ggtitle("Berry Count data",
+           subtitle="Each line represents one study area")+
+   ylab("log(mean Berry Count)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.bcount.plot 
+```
+
+Some mean berry counts are very small:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+select <- bcount.mean$mean.Berry.Count < 1
+bcount.mean[select,]
+
+```
+
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+```
+
+# Squirrels
+
+## Year when each study area was surveyed
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Squirrels", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+user.df <- data.extract$user.data
+user.df$STUDY_AREA_NAME_shrt <- substr(user.df$STUDY_AREA_NAME,1,20)
+
+```
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+addmargins(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass),2)
+```
+
+
+## Sites with odd numbers of records
+
+Notice that some sites appear to have only a very small number of records (< 10)?
+
+```{r}
+#| echo: false
+select<- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass))
+select<- select[select$Freq < 10 & select$Freq > 0,]
+
+odd.cases <- merge(user.df, select)  
+cat("Cases with odd Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=odd.cases, exclude=NULL, na.action=na.pass)
+```
+
+## Missing lat/long information
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not available for a record. This needs to be added
+to the record
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+select <- is.na(user.df$LONGITUDE_DD) | is.na(user.df$LATITUDE_DD) 
+
+cat("Total records missing lat/long is ", sum(select), "\n")
+
+cat("\n\nTabulation of where missing lat/long occurs \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+```
+
+**How is it possible that long/lat is not known for some study area?**
+
+## Missing ECODOMAIN 
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data so ecodomain could not be determined\n\n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+    cat("\n\n\nSome study areas do not have an ecodomain \n")
+    site.lat.long[ is.na(site.lat.long[is.na(site.lat.long$ECODOMAIN),])]
+    #stop()
+}
+
+
+user.df <- merge(user.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+## Checking species code
+
+### Which species codes are present? 
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=user.df, exclude=NULL, na.action=na.pass)
+```
+
+**Should this protocol include species that are not TAHU?
+
+### Records with NULL species codes
+
+Data records with missing species codes
+
+```{r}
+#| echo: false
+# records with missing species code
+select <- user.df$SPECIES_CODE == "NULL"
+
+yvars <- c("STUDY_AREA_NAME_shrt","Year", "SPECIES_CODE","TRANSECT","COUNT")
+yvars %in% names(user.df)
+user.df[select, yvars]
+
+```
+
+**Why is species code NULL?**
+
+## Transect codes
+
+The transect codes are not coded consistently across the study areas. In particular, I'm assuming that, for example, T1 measured over multiple years
+is the same transect. So is "1-2015" and "T1-2015" the same transect? Is "T1-2015" and "T1-2016" the same transect measured in different years?
+
+
+```{r}
+#| echo: false
+temp <- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+TRANSECT, data=user.df, exclude=NULL, na.action=na.pass))
+temp <- temp[ order(temp$STUDY_AREA_NAME_shrt, temp$TRANSECT),]
+temp
+```
+
+
+## Calls.
+
+### Summarize to transect level
+
+The data is first summarized to the transect-year level by finding 
+the mean number of calls on a transect over multiple visits for each individual transect. 
+This reduces the data to one measurement per transect per STUDY_AREA/year. 
+
+The first few records are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+count.transect <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT"), 
+                              plyr::summarize, mean.calls=mean(COUNT))
+
+temp <- count.transect
+temp$STUDY_AREA_NAME <- NULL
+head(temp)
+
+# make a transect label that is unique to each study area names
+count.transect$SA.TRANSECT <- paste0(count.transect$STUDY_AREA_NAME, "....", count.transect$TRANSECT)
+
+```
+
+
+It is implicitly assumed that all transects are run on all days within a STUDY_AREA
+so every transect has the same number of days of measurement. 
+If transects are changed over time, that is not a problem, but transects 
+should not be introduced or removed part way through a year.
+
+### Preliminary plot
+
+A summary plot of the mean number of calls in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-call-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-call-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+count.transect.mean <- plyr::ddply(count.transect, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   mean.calls=mean(mean.calls))
+
+prelim.plot <- ggplot(data=count.transect.mean, aes(x=Year, y=log(mean.calls+.5)))+
+   ggtitle("Squirrel count data",
+           subtitle="Each line represents one study area")+
+   ylab("log(Mean count+.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+
+```
+
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+```
+
+# Waterfowl
+
+## Years when each study area was surveyed
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract <- read.LTEM.data(study.type="Waterfowl", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+user.df <- data.extract$user.data
+user.df$STUDY_AREA_NAME_shrt <- substr(user.df$STUDY_AREA_NAME,1,20)
+
+```
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+addmargins(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass),2)
+```
+
+
+## Sites with odd numbers of records
+
+Notice that some sites appear to have only a very large number of records (>500)?
+
+```{r}
+#| echo: false
+select<- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass))
+select<- select[select$Freq >50 & select$Freq > 0,]
+
+odd.cases <- merge(user.df, select)  
+cat("Cases with odd Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=odd.cases, exclude=NULL, na.action=na.pass)
+```
+
+## Missing lat/long information
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not available for a record. This needs to be added
+to the record
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+select <- is.na(user.df$LONGITUDE_DD) | is.na(user.df$LATITUDE_DD) 
+
+cat("Total records missing lat/long is ", sum(select), "\n")
+
+cat("\n\nTabulation of where missing lat/long occurs \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+```
+
+**How is it possible that long/lat is not known for some study area?**
+
+## Missing ECODOMAIN 
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data so ecodomain could not be determined\n\n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+    cat("\n\n\nSome study areas do not have an ecodomain \n")
+    site.lat.long[ is.na(site.lat.long[is.na(site.lat.long$ECODOMAIN),])]
+    #stop()
+}
+
+
+user.df <- merge(user.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+
+## Checking species code
+
+### Which species codes are present? 
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=user.df, exclude=NULL, na.action=na.pass)
+```
+
+**Should this protocol record species at Family level?
+
+### Records with NULL species codes
+
+Data records with missing species codes
+
+```{r}
+#| echo: false
+# records with missing species code
+select <- user.df$SPECIES_CODE == "NULL"
+
+yvars <- c("STUDY_AREA_NAME_shrt","Year", "SPECIES_CODE","SAMPLE_LABEL","COUNT")
+yvars %in% names(user.df)
+user.df[select, yvars]
+
+```
+
+**Why is species code NULL?**
+
+## SAMPLE labels
+
+SAMPLE LABELS need some editing. For example for Alice Lake you have "Site 1", "Site 2" and "Site 1 + Site 2". These cannot be mixed across years.
+
+```{r}
+#| echo: false
+temp<- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+SAMPLE_LABEL, data=user.df, exclude=NULL, na.action=na.pass))
+temp <- temp[ order(temp$STUDY_AREA_NAME_shrt, temp$SAMPLE_LABEL),]
+temp
+```
+
+Is it sensible to have multiple SAMPLE_LABELS for a study area, such as Alice Lake? 
+
+## Maximum counts
+
+The data is first summarized to the date level by summing the count over the different species
+for each date-sample station combination. 
+This reduces the data to one measurement per date per site/year. 
+
+The summarized data are
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+count.date <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","Date","SAMPLE_LABEL"), 
+                          plyr::summarize,
+                          total.count=sum(COUNT, na.rm=TRUE))
+
+count.date$SA.SAMPLE_LABEL <- paste0(count.date$STUDY_AREA_NAME, "....", count.date$SAMPLE_LABEL)
+
+temp <- count.date
+temp$STUDY_AREA_NAME <- NULL
+temp
+
+```
+
+Notice that, for example, Alice Lake, the SAMPLE_LABELS are msitures of different sites; Brandywine Falls only has Station 1 in 2016, etc.
+
+### Preliminary plot
+
+A summary plot of the total count in each year for each STUDY_AREA  is shown in @fig-call-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-count-prelim
+#| warning: false
+#| message: false
+
+prelim.plot <- ggplot(data=count.date, aes(x=Year, y=log(total.count+.5), color=STUDY_AREA_NAME_shrt))+
+   ggtitle("Waterfowl (total) count data",
+           subtitle="Each line represents one site in a study area")+
+   ylab("log(Total Count+.5)")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=SA.SAMPLE_LABEL), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+
+```
+
+Each line represents a particular station within a STUDY_AREA. 
+
+
+### Obtain maximum count in N/D/J/F 
+
+Next the maximum count in each month in each station is found. The maximum counts are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# Find the maximum count each month (Nov/Dec/Jan/Feb only)
+count.date$Month  <- lubridate::month(count.date$Date)
+count.max <- plyr::ddply(count.date, 
+                         c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","SAMPLE_LABEL","SA.SAMPLE_LABEL","Year","Month"), 
+                         plyr::summarize, 
+                         max.count=max(total.count, na.rm=TRUE))
+count.max$Year.Month <- count.max$Year+((count.max$Month-.5)/12)     # this is the approximate midpoint of each month
+temp <- count.max
+temp$Year.Month      <- NULL
+temp$STUDY_AREA_NAME <- NULL
+temp$SA.SAMPLE_LABEL <- NULL
+temp
+```
+
+When the maximum counts are restricted to November, December, January, and February, the
+data are now:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+count.max <- count.max[ count.max$Month %in% c(1:2,11:12),]  # only retain N/D/J/F data
+temp <- count.max
+temp$Year.Month <- NULL
+temp$Year.Month      <- NULL
+temp$STUDY_AREA_NAME <- NULL
+temp$SA.SAMPLE_LABEL <- NULL
+temp
+```
+
+Many STUDY_AREA_NAMEs were NOT measured in N/D/J/F, so the remainining data are:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=count.max, exclude=NULL, na.action=na.pass)
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=count.max, exclude=NULL, na.action=na.pass)
+```
+
+**Does this seem right that most study areas have NO overwintering waterfowl?**
+**Does this seem right that we now only have 1 ECODOMAIN**. No analysis is possible to compare trends across ECODOMAINS.
+
+
+
+
+```{r}
+#| echo: false
+##################################################################################################
+##################################################################################################
+##################################################################################################
+##################################################################################################
+```
+
+# Vegetation (Alpine and Grassland)
+
+## Years when each study area was surveyed
+
+```{r}
+#| echo: false
+#| include: false
+
+# get the data from the Excel work.books.
+# we put the list of work books here, including the file type (xls or xlsx).
+# You can put multiple stations here because the station information is included on the raw data
+
+# Get the data base information and any corrections here
+data.extract1 <- read.LTEM.data(study.type="Alpine",     site.names="**ALL**", .name_repair=TRUE)
+data.extract2 <- read.LTEM.data(study.type="Grasslands", site.names="**ALL**", .name_repair=TRUE)
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+user.df <- plyr::rbind.fill(data.extract1$user.data, data.extract2$user.data)
+user.df$STUDY_AREA_NAME_shrt <- substr(user.df$STUDY_AREA_NAME,1,20)
+
+```
+
+```{r}
+#| echo: false
+cat("Number of records in each study area x year combination \n")
+addmargins(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass),2)
+```
+
+
+## Sites with odd numbers of records
+
+Notice that some sites appear to have only a very small number of records (<100)? Is this correct given that vegetation is being monitored?
+For example, check Squitty Bay dataset or Strathcona Park? 
+
+```{r}
+#| echo: false
+select<- as.data.frame(xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df, exclude=NULL, na.action=na.pass))
+select<- select[select$Freq <100 & select$Freq > 0,]
+
+odd.cases <- merge(user.df, select)  
+cat("Cases with odd Number of records in each study area x year combination \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=odd.cases, exclude=NULL, na.action=na.pass)
+```
+
+## Missing lat/long information
+
+The Ecodomain of each study area was obtained by looking up the mean latitude/longitude of observations for each STUDY_AREA
+in the Ecoprovices provided in the *bcmaps* package. In some cases, latitude/longitude is not available for a record. This needs to be added
+to the record
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+select <- is.na(user.df$LONGITUDE_DD) | is.na(user.df$LATITUDE_DD) 
+
+cat("Total records missing lat/long is ", sum(select), "\n")
+
+cat("\n\nTabulation of where missing lat/long occurs \n")
+xtabs(~STUDY_AREA_NAME_shrt+Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+```
+
+**How is it possible that long/lat is not known for some study area?**
+
+## Missing ECODOMAIN 
+
+The classification of each remaining STUDY_AREA into its EcoDomain is:
+
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# there may be slight deviations in the lat/long within each study area, but presumably, the mean should be ine
+site.long.lat <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt"), plyr::summarize,
+     LONGITUDE_DD= mean(LONGITUDE_DD, na.rm=TRUE),
+     LATITUDE_DD = mean(LATITUDE_DD,  na.rm=TRUE))
+
+select <- is.na(site.long.lat$LONGITUDE_DD) | is.na(site.long.lat$LATITUDE_DD)
+bad.site <- site.long.lat[select,]
+
+cat("Site missing long/lat data so ecodomain could not be determined\n\n")
+site.long.lat[select, c("STUDY_AREA_NAME_shrt","LONGITUDE_DD","LATITUDE_DD")]
+
+site.long.lat <- site.long.lat[!select,]
+
+site.long.lat$ECODOMAIN <- get_ecodomain(site.long.lat[,c("LONGITUDE_DD","LATITUDE_DD")]) 
+xtabs(~STUDY_AREA_NAME_shrt+ECODOMAIN, data=site.long.lat, exclude=NULL, na.action=na.pass)
+
+if(any(is.na(site.long.lat$ECODOMAIN))){
+   # no ecodomains should be missing
+    cat("\n\n\nSome study areas do not have an ecodomain \n")
+    site.lat.long[ is.na(site.lat.long[is.na(site.lat.long$ECODOMAIN),])]
+    #stop()
+}
+
+
+user.df <- merge(user.df, site.long.lat[,c("STUDY_AREA_NAME","ECODOMAIN")], by="STUDY_AREA_NAME")
+
+```
+
+**Mt Robson has two separate transects entered as two separate projects **
+
+## Checking species code
+
+### Which species codes are present? 
+
+The species code should be the same across for all data values.
+
+
+```{r}
+#| echo: false
+# Check the Species code to make sure that all the same
+# This isn't used anywhere in the analysis but is useful to know
+xtabs(~SPECIES_CODE+Year, data=user.df, exclude=NULL, na.action=na.pass)
+```
+
+
+### Records with NULL species codes
+
+Data records with missing species codes
+
+```{r}
+#| echo: false
+# records with missing species code
+select <- user.df$SPECIES_CODE == "NULL"
+
+yvars <- c("STUDY_AREA_NAME_shrt","Year", "SPECIES_CODE","PLOT","TRANSECT","PERCENT_COVER")
+yvars %in% names(user.df)
+user.df[select, yvars]
+
+```
+
+**Why is species code NULL?** Does this indicate NO plants? 
+
+## Transect numbers
+
+THe TRANSECT values were missing for all of the data values, and I extracted them from the Plot number as best I can. 
+Here is the tabulation of the **imputed** transect numbers. These should be explicit in the data base
+
+```{r}
+#| echo: false
+# records with missing species code
+xtabs(~STUDY_AREA_NAME_shrt+TRANSECT, data=user.df, exclude=NULL, na.action=na.pass)
+
+```
+
+**IN some cases the TRANSECT number is blank** (first column) ansd switch between T1 and T01 etc. This needs to be standardized.
+
+## % cover missing and species code present
+
+```{r}
+#| echo: false
+select <-is.na(user.df$PERCENT_COVER) & !is.na(user.df$SPECIES_CODE)
+cat("Records where % cover is missing but species name is not missing\n")
+xtabs(~STUDY_AREA_NAME + Year, data=user.df[select,], exclude=NULL, na.action=na.pass)
+
+
+```
+
+These likely represent database loading errors (e.g. %Foliar Cover not treated at %Cover).
+
+### Summarize to transect level
+
+The data is first summarized to the transect-year level by finding 
+the mean % cover per plot on a transect  for each individual transect. 
+This reduces the data to one measurement per transect per STUDY_AREA/year. 
+
+Transect with a total cover of 0 (likely errors as noted above) are:
+
+```{r}
+#| echo: false
+# Summarize the imputed data to one number per year per transect
+cover <- plyr::ddply(user.df, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT","PLOT"), plyr::summarize,
+                          PERCENT_COVER=sum(PERCENT_COVER, na.rm=TRUE))
+
+# Compute the average total cover for each transect so I can plot these over time
+cover.transect <- plyr::ddply(cover, c("STUDY_AREA_NAME","STUDY_AREA_NAME_shrt","ECODOMAIN","Year","TRANSECT"), plyr::summarize,
+                          PERCENT_COVER=mean(PERCENT_COVER, na.rm=TRUE))
+#cover.transect
+
+temp <- cover.transect
+temp$STUDY_AREA_NAME <- NULL
+temp[ temp$PERCENT_COVER==0,c("STUDY_AREA_NAME_shrt","Year","TRANSECT","PERCENT_COVER")]
+
+# make a transect label that is unique to each study area names
+cover.transect$SA.TRANSECT <- paste0(cover.transect$STUDY_AREA_NAME, "....", cover.transect$TRANSECT)
+
+```
+
+NOtice that some transect labels are blank (see previous notes)
+
+### Preliminary plot
+
+A summary plot of the mean percent cover in each year for each STUDY_AREA and
+an the trends over time is shown in @fig-cover-prelim.
+
+```{r}
+#| echo: false
+#| fig-cap: "Summary plot of the data. The data is analyzed on the logarithmic scale."
+#| label: fig-cover-prelim
+#| warning: false
+#| message: false
+
+# get one number per study area per year and plot these
+cover.transect.mean <- plyr::ddply(cover.transect, c("STUDY_AREA_NAME","ECODOMAIN","Year"), plyr::summarize,
+                                   PERCENT_COVER=mean(PERCENT_COVER))
+
+prelim.plot <- ggplot(data=cover.transect.mean, aes(x=Year, y=log(PERCENT_COVER+.01)))+
+   ggtitle("Alpine Vegetation % cover",
+           subtitle="Each line represents one study area")+
+   ylab("log(Percent Cover))")+
+   geom_point(position=position_dodge(width=.1))+
+   geom_line( aes(group=STUDY_AREA_NAME), position=position_dodge(width=.1))+
+   facet_wrap(~ECODOMAIN, ncol=2)+
+   scale_x_continuous(breaks=integer_breaks())
+prelim.plot 
+
+```
+
+Again, lots of transects with 0% total cover which is incorrect.
