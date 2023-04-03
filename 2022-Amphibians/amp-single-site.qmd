@@ -79,6 +79,10 @@ under each type of survey (e.g., salamanders cannot be detected under auditory s
 the breeding season and not outside the breeding season. The breeding season may be site.year.species dependent. 
 * Accounting for detection probabilities. Just because an amphibian species was not detected, does not imply that was not present. The surveyor
 may have been unlucky and not seen/heard the species when the transect was run. 
+* It doesn/t eem to be possible to distinguish between auditory and visual surveys based on information in the data base other than by looking at the transect name. 
+This will not work if the transect name is a general name. 
+* Detection data on either type of transect includes both visual and auditory detections (see the A0/A2 column under the 1.3 and 1.4 protocols.)
+The auditory detections on a visual transect should be deleted and vice-versa.
 
 I recommend that a revised protocol based on the North American Amphibian Monitoring Plan be used that accounts for the above factors.
 The survey protocol has been extensively field tested and should give you much better data. As well, Parks Canada has an amphibian monitoring plan
